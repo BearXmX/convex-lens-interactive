@@ -1,5 +1,5 @@
 <template>
-  <section class="lens-page">
+  <section class="lens-page" :class="{ 'left-panel-collapsed': !leftPanelOpen, 'right-panel-collapsed': !rightPanelOpen }">
     <div class="bg-grid"></div>
     <div class="scan-line"></div>
 
@@ -14,6 +14,8 @@
 
       <div class="top-actions">
         <button class="ghost guide-top-btn" @click="showGuideDialog = true">使用引导</button>
+        <button class="ghost mobile-panel-btn" @click="toggleLeftPanel">{{ leftPanelOpen ? '收起控制' : '展开控制' }}</button>
+        <button class="ghost mobile-panel-btn" @click="toggleRightPanel">{{ rightPanelOpen ? '收起知识' : '展开知识' }}</button>
         <button class="ghost" :class="{ active: cameraView === 'standard' }" @click="setCameraView('standard')">标准视角</button>
         <button class="ghost" :class="{ active: cameraView === 'top' }" @click="setCameraView('top')">俯视光路</button>
         <button class="ghost top-snapshot-btn" @click="snapshotExperiment">快照当前实验</button>
@@ -75,7 +77,7 @@
                   <li><b>u &gt; 2f：</b>倒立、缩小、实像，像在 f 与 2f 之间。</li>
                   <li><b>u = 2f：</b>倒立、等大、实像，像在 2f 处。</li>
                   <li><b>f &lt; u &lt; 2f：</b>倒立、放大、实像，像在 2f 以外。</li>
-                  <li><b>u = f：</b>出射光线近似平行于主光轴，不在有限位置成清晰像。</li>
+                  <li><b>u = f：</b>出射光线彼此近似平行，不在有限位置成清晰像。</li>
                   <li><b>u &lt; f：</b>正立、放大、虚像，光屏不能承接。</li>
                 </ul>
               </div>
@@ -101,7 +103,7 @@
     </Teleport>
 
     <main class="layout">
-      <aside class="panel left-panel">
+      <aside class="panel left-panel" :class="{ collapsed: !leftPanelOpen }">
         <div class="panel-title"><span></span>实验控制</div>
 
         <div class="block">
@@ -109,7 +111,9 @@
           <RangeRow label="物距 u" :value="state.u" suffix="cm" :min="6" :max="60" :step="0.1" @update:value="setManualValue('u', $event)" />
           <RangeRow label="焦距 f" :value="state.f" suffix="cm" :min="6" :max="20" :step="0.1" @update:value="setManualValue('f', $event)" />
           <RangeRow label="物高 H" :value="state.h" suffix="cm" :min="2" :max="8" :step="0.1" @update:value="setManualValue('h', $event)" />
-          <p class="tip">先调物距、焦距和物高，3D 光具座会实时改变光路、像距和成像性质。</p>
+          <p class="tip">
+            先调物距、焦距和物高，3D 光具座会实时改变光路、像距和成像性质。为避免像距过大超出光具座，接近焦点时系统会自动限制极端参数。
+          </p>
         </div>
 
         <div class="block">
@@ -131,6 +135,7 @@
             <button :class="{ active: showRays }" @click="toggleLayer('rays')">三条特殊光线</button>
             <button :class="{ active: showScreen }" @click="toggleLayer('screen')">光屏</button>
             <button :class="{ active: showLabels }" @click="toggleLayer('labels')">标签</button>
+            <button :class="{ active: showDimensions }" @click="toggleLayer('dimensions')">尺寸辅助线</button>
           </div>
           <p class="tip">这是图层开关：可先隐藏标签讲现象，再打开光线和标注讲原理。</p>
         </div>
@@ -245,7 +250,7 @@
         </div>
       </section>
 
-      <aside class="panel right-panel">
+      <aside class="panel right-panel" :class="{ collapsed: !rightPanelOpen }">
         <div class="panel-title"><span></span>知识速览</div>
 
         <div class="data-card">
@@ -417,7 +422,7 @@
             <li><b>u &gt; 2f：</b>倒立、缩小、实像，像在 f 与 2f 之间。</li>
             <li><b>u = 2f：</b>倒立、等大、实像，像在 2f 处。</li>
             <li><b>f &lt; u &lt; 2f：</b>倒立、放大、实像，像在 2f 以外。</li>
-            <li><b>u = f：</b>出射光线近似平行于主光轴，不在有限位置成像。</li>
+            <li><b>u = f：</b>出射光线彼此近似平行，不在有限位置成像。</li>
             <li><b>u &lt; f：</b>正立、放大、虚像，光屏不能承接。</li>
           </ul>
         </div>
@@ -461,8 +466,6 @@ type ExperimentLog = {
   conclusion: string
 }
 
-type RayStyle = 'yellow' | 'cyan' | 'green' | 'red'
-
 type OpticalMetrics = {
   u: number
   f: number
@@ -497,11 +500,14 @@ const playing = ref(false)
 const showRays = ref(true)
 const showScreen = ref(true)
 const showLabels = ref(true)
+const showDimensions = ref(true)
 const focusChallenge = ref(false)
 const appMode = ref<AppMode>('bench')
 const presetKey = ref<PresetKey>('between')
 const cameraView = ref<CameraView>('standard')
 const showGuideDialog = ref(false)
+const leftPanelOpen = ref(true)
+const rightPanelOpen = ref(true)
 const experimentLogs = ref<ExperimentLog[]>([])
 let experimentLogId = 0
 
@@ -528,6 +534,8 @@ let frameId = 0
 let lastTime = 0
 let demoT = 0
 let dynamicUpdateFrame = 0
+let rendererResizeFrame = 0
+let panelResizeTimers: number[] = []
 let isUserOrbiting = false
 
 let rootGroup: THREE.Group
@@ -538,6 +546,52 @@ let labelGroup: THREE.Group
 let screenGroup: THREE.Group
 let lensMesh: THREE.Mesh
 let glowLight: THREE.PointLight
+
+type LiveRayKey = 'yellowIn' | 'yellowOut' | 'cyanMain' | 'greenIn' | 'greenOut' | 'redExt1' | 'redExt2'
+type LiveRaySegment = {
+  line: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>
+  arrow: THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial>
+}
+
+type LiveCandleOptions = {
+  bodyColor: number
+  accentColor: number
+  flameColor: number
+  glowColor: number
+  opacity?: number
+  ghost?: boolean
+  withLight?: boolean
+}
+
+const liveScene = {
+  inited: false,
+  objectCandle: null as THREE.Group | null,
+  imageCandle: null as THREE.Group | null,
+  screen: null as THREE.Group | null,
+  imagePatch: null as THREE.Mesh | null,
+  screenBlurPatch: null as THREE.Mesh | null,
+  virtualHalo: null as THREE.Mesh | null,
+  focusMarks: [] as THREE.Group[],
+  rays: {} as Record<LiveRayKey, LiveRaySegment>,
+  objectDim: null as THREE.Line | null,
+  imageDim: null as THREE.Line | null,
+  objectDimStart: null as THREE.Line | null,
+  objectDimEnd: null as THREE.Line | null,
+  imageDimStart: null as THREE.Line | null,
+  imageDimEnd: null as THREE.Line | null,
+  objectLabel: null as THREE.Sprite | null,
+  imageLabel: null as THREE.Sprite | null,
+  screenLabel: null as THREE.Sprite | null,
+  focusStatusLabel: null as THREE.Sprite | null,
+  objectDimLabel: null as THREE.Sprite | null,
+  imageDimLabel: null as THREE.Sprite | null,
+  infiniteTipLabel: null as THREE.Sprite | null,
+  outOfRangeTipLabel: null as THREE.Sprite | null,
+  appLabel: null as THREE.Sprite | null,
+  cameraModel: null as THREE.Group | null,
+  projectorModel: null as THREE.Group | null,
+  magnifierModel: null as THREE.Group | null,
+}
 
 const RangeRow = defineComponent({
   name: 'RangeRow',
@@ -562,8 +616,7 @@ const RangeRow = defineComponent({
           max: props.max,
           step: props.step,
           showTooltip: false,
-          // @ts-ignore
-          onInput: (value: number) => emit('update:value', Number(value)),
+          // 只保留一个更新事件，避免拖动时同一帧触发两次 Three.js 更新。
           // @ts-ignore
           'onUpdate:modelValue': (value: number) => emit('update:value', Number(value)),
         }),
@@ -591,10 +644,10 @@ const imageType = computed(() => {
     return {
       title: 'u = f：不在有限位置成像',
       short: '不成有限像',
-      nature: '出射光线近似平行于主光轴，光屏上不能得到清晰像',
+      nature: '出射光线彼此近似平行，光屏上不能得到清晰像',
       pos: '像距趋于无穷远',
       screen: '不可承接',
-      toast: '物体在焦点处时，出射光线近似平行于主光轴，光屏无法在有限位置接到清晰像。',
+      toast: '物体在焦点处时，出射光线彼此近似平行，光屏无法在有限位置接到清晰像。',
     }
   }
 
@@ -670,7 +723,7 @@ const magnificationDerivation = computed(() => {
 
 const currentRuleText = computed(() => {
   const { u, f, v } = metrics.value
-  if (!Number.isFinite(v)) return `当前 u≈f，出射光线近似平行于主光轴，不能在有限位置成像。`
+  if (!Number.isFinite(v)) return `当前 u≈f，出射光线彼此近似平行，不能在有限位置成像。`
   if (u > 2 * f) return `当前 u>${formatNumber(2 * f)}cm，即 u>2f：倒立、缩小、实像，像在 f 与 2f 之间。`
   if (Math.abs(u - 2 * f) < 0.25) return `当前 u≈2f：倒立、等大、实像，像在另一侧 2f 附近。`
   if (u > f && u < 2 * f) return `当前 f<u<2f：倒立、放大、实像，像在 2f 以外。`
@@ -725,7 +778,7 @@ const ruleRows: Array<{ key: RuleKey; title: string; range: string; result: stri
   { key: 'far', title: 'u > 2f', range: '物体在二倍焦距以外', result: '倒立、缩小、实像，像在 f 与 2f 之间' },
   { key: 'twof', title: 'u = 2f', range: '物体在二倍焦距处', result: '倒立、等大、实像，像在 2f 处' },
   { key: 'between', title: 'f < u < 2f', range: '物体在一倍到二倍焦距之间', result: '倒立、放大、实像，像在 2f 以外' },
-  { key: 'focus', title: 'u = f', range: '物体在焦点处', result: '折射光线近似平行，不成有限清晰像' },
+  { key: 'focus', title: 'u = f', range: '物体在焦点处', result: '折射光线彼此近似平行，不成有限清晰像' },
   { key: 'inside', title: 'u < f', range: '物体在焦点以内', result: '正立、放大、虚像，光屏不能承接' },
 ]
 
@@ -1016,7 +1069,7 @@ function exportExperimentLogsAsImage() {
   const url = canvas.toDataURL('image/png')
   const a = document.createElement('a')
   a.href = url
-  a.download = `凸透镜成像实验日志_${Date.now()}.png`
+  a.download = `凸透镜成像实验日志_${formatFileDateTime()}.png`
   a.click()
 }
 
@@ -1097,22 +1150,6 @@ function drawCanvasLines(ctx: CanvasRenderingContext2D, lines: string[], x: numb
   })
 }
 
-function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) {
-  let line = ''
-  let offsetY = 0
-  for (const char of text) {
-    const testLine = line + char
-    if (ctx.measureText(testLine).width > maxWidth && line) {
-      ctx.fillText(line, x, y + offsetY)
-      line = char
-      offsetY += lineHeight
-    } else {
-      line = testLine
-    }
-  }
-  ctx.fillText(line, x, y + offsetY)
-}
-
 function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -1136,6 +1173,17 @@ function roundRect(
   ctx.closePath()
   if (fill) ctx.fill()
   if (stroke) ctx.stroke()
+}
+
+function formatFileDateTime(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const year = date.getFullYear()
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hour = pad(date.getHours())
+  const minute = pad(date.getMinutes())
+  const second = pad(date.getSeconds())
+  return `${year}-${month}-${day}_${hour}-${minute}-${second}`
 }
 
 function formatNumber(value: number, digits = 1) {
@@ -1188,7 +1236,7 @@ function getSafeUByImageDistance(rawU: number, f: number) {
   const uMax = 60
   const u = clamp(rawU, uMin, uMax)
 
-  // 保留 u=f 作为一个明确的课堂演示点：出射光线近似平行于主光轴，不在有限位置成像。
+  // 保留 u=f 作为一个明确的课堂演示点：出射光线彼此近似平行，不在有限位置成像。
   if (Math.abs(u - f) < EPS) return f
 
   // 限制有限像距：|v| = |f·u/(u-f)| <= MAX_ABS_IMAGE_DISTANCE_CM。
@@ -1273,7 +1321,7 @@ function applyCurrentLessonStep() {
     }
   }
 
-  updateDynamicScene()
+  scheduleDynamicSceneUpdate()
 }
 
 function nextLessonStep() {
@@ -1316,7 +1364,7 @@ function setAppMode(mode: AppMode) {
   if (mode === 'magnifier') setPreset('inside')
   if (mode === 'bench') presetKey.value = ''
 
-  updateDynamicScene()
+  scheduleDynamicSceneUpdate()
 }
 
 function toggleFocusChallenge() {
@@ -1340,25 +1388,22 @@ function toggleFocusChallenge() {
     state.screenCm = clamp(metrics.value.v, 0, BENCH_LIMIT_CM)
   }
 
-  updateDynamicScene()
+  scheduleDynamicSceneUpdate()
 }
 
 function snapScreenToImage() {
   if (!metrics.value.real || !Number.isFinite(metrics.value.v)) return
   state.screenCm = clamp(metrics.value.v, 0, BENCH_LIMIT_CM)
   showScreen.value = true
-  updateDynamicScene()
+  scheduleDynamicSceneUpdate()
 }
 
-function togglePlay() {
-  playing.value = !playing.value
-}
-
-function toggleLayer(layer: 'rays' | 'screen' | 'labels') {
+function toggleLayer(layer: 'rays' | 'screen' | 'labels' | 'dimensions') {
   if (layer === 'rays') showRays.value = !showRays.value
   if (layer === 'screen') showScreen.value = !showScreen.value
   if (layer === 'labels') showLabels.value = !showLabels.value
-  updateDynamicScene()
+  if (layer === 'dimensions') showDimensions.value = !showDimensions.value
+  scheduleDynamicSceneUpdate()
 }
 
 function resetExperiment() {
@@ -1441,9 +1486,9 @@ function initThree() {
   updateDynamicScene()
   setCameraView('standard')
 
-  resizeObserver = new ResizeObserver(() => requestAnimationFrame(resizeRenderer))
+  resizeObserver = new ResizeObserver(scheduleRendererResize)
   resizeObserver.observe(canvasWrapRef.value)
-  window.addEventListener('resize', resizeRenderer, { passive: true })
+  window.addEventListener('resize', scheduleRendererResize, { passive: true })
 
   lastTime = performance.now()
   animate(lastTime)
@@ -1549,112 +1594,800 @@ function createTickMarks() {
 }
 
 function updateDynamicScene() {
+  // 拖动物距 / 焦距 / 物高时不再 clearGroup + 重建。
+  // 这里只创建一次可复用对象，后续只更新 position / scale / BufferGeometry 坐标。
+  updateLiveOpticsScene()
+}
+
+function updateLiveOpticsScene() {
   if (!dynamicGroup || !rayGroup || !labelGroup || !screenGroup) return
-
-  clearGroup(dynamicGroup)
-  clearGroup(rayGroup)
-  clearGroup(screenGroup)
-
-  // 标签组里静态刻度和凸透镜标签在 createStaticScene 生成；这里重建动态标签时保留简单做法：全部重建。
-  clearGroup(labelGroup)
-  labelGroup.visible = showLabels.value
-  createTickLabelsAndLensLabel()
+  ensureLiveOpticsScene()
 
   const m = metrics.value
   const objectX = -cmToX(m.u)
   const objectTopY = m.h * HEIGHT_TO_UNIT
   const rawImageX = cmToX(m.v)
   const rawImageTopY = m.imageHeight * HEIGHT_TO_UNIT
-
-  // 实像 / 虚像都按真实像距位置绘制，不再把 v=135cm 画到 60cm 边缘。
   const imageX = getImageDisplayX(m.v)
   const imageTopY = getImageDisplayY(rawImageTopY)
   const imageOutOfRange = isPointOutsideScene(imageX, imageTopY)
   const virtualOutOfRange = isVirtualImageOutOfRange(m, rawImageX, rawImageTopY)
-  const compressedImage = false
+  const canShowImage = Number.isFinite(m.v) && !imageOutOfRange && !virtualOutOfRange
 
-  createFocusMarkers(m.f)
-  createObjectArrow(objectX, objectTopY)
-  createApplicationModeModel(m, objectX, imageX)
-  createSceneAnnotations(m, objectX, objectTopY, imageX, imageTopY, compressedImage, virtualOutOfRange, rawImageX)
-
-  if (Number.isFinite(m.v)) {
-    if (!imageOutOfRange && !virtualOutOfRange) {
-      createImageArrow(imageX, imageTopY, m.real, compressedImage)
-    } else if (m.real && imageOutOfRange) {
-      labelGroup.add(
-        makeTextSprite(
-          `实像真实位置已超过当前光具座\nv = ${formatNumber(m.v)}cm，未压缩显示\n请调整参数`,
-          '#34d9ff',
-          new THREE.Vector3(MAX_X - 2.0, 2.7, 1.18),
-          0.66,
-          38,
-        ),
-      )
-    }
-    if (showScreen.value && m.real) {
-      const screenCm = focusChallenge.value ? state.screenCm : m.v
-      const screenX = cmToX(screenCm)
-      if (screenX >= MIN_X && screenX <= MAX_X) {
-        createScreen(screenX, compressedImage)
-        if (focusChallenge.value) createScreenProjection(screenX, imageTopY, focusScore.value)
-      }
-    }
-  } else {
-    labelGroup.add(makeTextSprite('折射光线近似平行\n像距趋于无穷远', '#ffdf87', new THREE.Vector3(2.35, 1.95, 0.78), 0.92, 40))
-  }
+  updateLiveFocusMarkers(m.f)
+  updateLiveCandle(liveScene.objectCandle, objectX, objectTopY, true, 1)
+  updateLiveCandle(liveScene.imageCandle, imageX, imageTopY, canShowImage, m.real ? 0.78 : 0.48)
+  updateLiveImagePatch(imageX, imageTopY, canShowImage, m.real)
+  updateLiveScreen(m, imageTopY)
+  updateLiveDimensionSegments(m, objectX, imageX, canShowImage)
+  updateLiveLabels(m, objectX, objectTopY, imageX, imageTopY, canShowImage, imageOutOfRange, virtualOutOfRange, rawImageX)
+  updateLiveApplicationModels(objectX, imageX)
+  updateLiveRays(m, objectX, objectTopY, imageX, imageTopY, virtualOutOfRange)
 
   rayGroup.visible = showRays.value
-  if (showRays.value) createRays(m, objectX, objectTopY, imageX, imageTopY, virtualOutOfRange)
+  labelGroup.visible = showLabels.value
 }
 
-function createTickLabelsAndLensLabel() {
-  // 静态标签只保留少量刻度，避免和 F / 2F / 焦距线段文字堆在一起。
-  labelGroup.add(makeTextSprite('凸透镜', '#7ee8ff', new THREE.Vector3(0, 2.7, 1.08), 0.86, 42))
+function ensureLiveOpticsScene() {
+  if (liveScene.inited) return
+
+  liveScene.objectCandle = createReusableCandle({
+    bodyColor: 0xfff1c2,
+    accentColor: 0xffd166,
+    flameColor: 0xff9f43,
+    glowColor: 0xffd166,
+    opacity: 1,
+    withLight: true,
+  })
+  dynamicGroup.add(liveScene.objectCandle)
+
+  liveScene.imageCandle = createReusableCandle({
+    bodyColor: 0xfff1c2,
+    accentColor: 0x34d9ff,
+    flameColor: 0xff9f43,
+    glowColor: 0x34d9ff,
+    opacity: 0.78,
+    ghost: true,
+  })
+  dynamicGroup.add(liveScene.imageCandle)
+
+  liveScene.imagePatch = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.52, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0x34d9ff,
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  )
+  liveScene.imagePatch.rotation.y = Math.PI / 2
+  dynamicGroup.add(liveScene.imagePatch)
+
+  liveScene.virtualHalo = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.62, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0xff6b7a,
+      transparent: true,
+      opacity: 0.13,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  )
+  liveScene.virtualHalo.rotation.y = Math.PI / 2
+  dynamicGroup.add(liveScene.virtualHalo)
+
+  liveScene.screen = createReusableScreen()
+  screenGroup.add(liveScene.screen)
+
+  liveScene.screenBlurPatch = new THREE.Mesh(
+    // 光屏寻像时只显示一个模糊光斑，不再显示蜡烛投影，避免遮挡光路。
+    new THREE.PlaneGeometry(1.05, 1, 1, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0x7ee8ff,
+      transparent: true,
+      opacity: 0.3,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  )
+  liveScene.screenBlurPatch.rotation.y = Math.PI / 2
+  screenGroup.add(liveScene.screenBlurPatch)
+  createReusableFocusMarkers()
+  createReusableDimensionSegments()
+  createReusableRaySegments()
+  createReusableLabels()
+  createReusableApplicationModels()
+
+  liveScene.inited = true
+}
+
+function createReusableCandle(options: LiveCandleOptions) {
+  // 标准化蜡烛：局部坐标 y=0 为主光轴，视觉顶部约 y=1；更新时通过 group.scale.y 表示物高 / 像高和倒正。
+  const group = new THREE.Group()
+  group.userData.opacity = options.opacity ?? 1
+
+  const transparent = (options.opacity ?? 1) < 1
+  const waxMat = new THREE.MeshStandardMaterial({
+    color: options.bodyColor,
+    roughness: 0.55,
+    metalness: 0.02,
+    transparent,
+    opacity: options.opacity ?? 1,
+    emissive: options.ghost ? options.accentColor : 0x000000,
+    emissiveIntensity: options.ghost ? 0.16 : 0,
+  })
+  const accentMat = new THREE.MeshBasicMaterial({
+    color: options.accentColor,
+    transparent: true,
+    opacity: Math.min(0.9, (options.opacity ?? 1) + 0.12),
+  })
+  const wickMat = new THREE.MeshBasicMaterial({ color: 0x1b1b1b, transparent, opacity: options.opacity ?? 1 })
+  const flameMat = new THREE.MeshBasicMaterial({
+    color: options.flameColor,
+    transparent: true,
+    opacity: Math.min(0.95, (options.opacity ?? 1) + 0.08),
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: options.glowColor,
+    transparent: true,
+    opacity: options.ghost ? 0.12 : 0.2,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+  const innerFlameMat = new THREE.MeshBasicMaterial({
+    color: 0xfff3a0,
+    transparent: true,
+    opacity: 0.88,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+  group.userData.opacityMaterials = [waxMat, accentMat, wickMat, flameMat, innerFlameMat, glowMat]
+
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 0.62, 28), waxMat)
+  body.position.y = 0.31
+  body.castShadow = true
+  body.receiveShadow = true
+  group.add(body)
+
+  const topRim = new THREE.Mesh(new THREE.TorusGeometry(0.086, 0.007, 8, 32), accentMat)
+  topRim.rotation.x = Math.PI / 2
+  topRim.position.y = 0.62
+  group.add(topRim)
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.145, 0.16, 0.045, 28), accentMat)
+  base.position.y = 0.022
+  group.add(base)
+
+  const wick = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.075, 10), wickMat)
+  wick.position.y = 0.69
+  group.add(wick)
+
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.22, 24), flameMat)
+  flame.position.y = 0.84
+  group.add(flame)
+
+  const innerFlame = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.13, 20), innerFlameMat)
+  innerFlame.position.y = 0.82
+  group.add(innerFlame)
+
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 20, 14), glowMat)
+  glow.scale.set(0.75, 1.15, 0.75)
+  glow.position.y = 0.84
+  group.add(glow)
+
+  if (options.withLight) {
+    const flameLight = new THREE.PointLight(options.glowColor, 0.8, 2.1)
+    flameLight.position.set(0, 0.84, 0.08)
+    group.add(flameLight)
+  }
+
+  return group
+}
+
+function updateLiveCandle(group: THREE.Group | null, x: number, topY: number, visible: boolean, opacity = 1) {
+  if (!group) return
+  if (!visible || !Number.isFinite(x) || !Number.isFinite(topY)) {
+    group.visible = false
+    return
+  }
+
+  const safeH = Math.max(Math.abs(topY), 0.22)
+  group.position.set(x, 0, 0)
+  group.scale.set(1, topY >= 0 ? safeH : -safeH, 1)
+  group.visible = true
+  setObjectOpacity(group, opacity)
+}
+
+function setObjectOpacity(object: THREE.Object3D, opacity: number) {
+  // 透明度没变化就不处理，避免拖动滑块时每帧 traverse 整个蜡烛模型。
+  const prevOpacity = typeof object.userData.opacity === 'number' ? object.userData.opacity : NaN
+  if (Math.abs(prevOpacity - opacity) < 0.001) return
+
+  object.userData.opacity = opacity
+
+  const updateOne = (mat: THREE.Material) => {
+    const writable = mat as THREE.Material & { opacity?: number; transparent?: boolean }
+    if (typeof writable.opacity === 'number') writable.opacity = opacity
+    if (typeof writable.transparent === 'boolean') writable.transparent = opacity < 1 || writable.transparent
+  }
+
+  const cachedMaterials = object.userData.opacityMaterials as THREE.Material[] | undefined
+  if (cachedMaterials?.length) {
+    cachedMaterials.forEach(updateOne)
+    return
+  }
+
+  object.traverse(child => {
+    const mesh = child as THREE.Mesh
+    const material = mesh.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(material)) material.forEach(updateOne)
+    else if (material) updateOne(material)
+  })
+}
+
+function createReusableScreen() {
+  const group = new THREE.Group()
+
+  // 光屏只保留半透明承接面板，去掉中间立柱和底座，避免遮挡光路与成像观察。
+  const screen = new THREE.Mesh(
+    new THREE.BoxGeometry(0.045, 2.55, 1.45),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.22,
+      roughness: 0.25,
+      metalness: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  )
+  screen.position.set(0, 0.75, 0)
+  group.add(screen)
+
+  return group
+}
+
+function updateLiveImagePatch(imageX: number, imageTopY: number, canShowImage: boolean, real: boolean) {
+  const patch = liveScene.imagePatch
+  const halo = liveScene.virtualHalo
+  if (!patch || !halo) return
+
+  const height = Math.max(0.28, Math.abs(imageTopY) + 0.28)
+  patch.visible = canShowImage && real
+  patch.position.set(imageX + 0.012, imageTopY * 0.5, -0.018)
+  patch.scale.set(1, height, 1)
+
+  halo.visible = canShowImage && !real
+  halo.position.set(imageX - 0.012, imageTopY * 0.5, 0.028)
+  halo.scale.set(1, height, 1)
+}
+
+function updateLiveScreen(m: OpticalMetrics, imageTopY: number) {
+  if (!liveScene.screen || !liveScene.screenBlurPatch) return
+
+  const canShowScreen = showScreen.value && m.real && Number.isFinite(m.v)
+  if (!canShowScreen) {
+    liveScene.screen.visible = false
+    liveScene.screenBlurPatch.visible = false
+    return
+  }
+
+  const screenCm = focusChallenge.value ? state.screenCm : m.v
+  const screenX = cmToX(screenCm)
+  const inRange = screenX >= MIN_X && screenX <= MAX_X
+
+  liveScene.screen.position.set(screenX, 0, 0)
+  liveScene.screen.visible = inRange
+
+  if (!focusChallenge.value || !inRange) {
+    liveScene.screenBlurPatch.visible = false
+    return
+  }
+
+  const safeScore = clamp(focusScore.value, 0, 100)
+  const blurOpacity = 0.18 + (1 - safeScore / 100) * 0.32
+  const clampedTopY = clamp(imageTopY, -2.05, 2.05)
+  const blurHeight = Math.max(0.62, Math.min(2.55, Math.abs(clampedTopY) + 0.62))
+  const blurWidth = 0.62 + (safeScore / 100) * 0.36
+  const blurMat = liveScene.screenBlurPatch.material as THREE.MeshBasicMaterial
+  blurMat.color.setHex(safeScore >= 80 ? 0x7ee8ff : 0xffd166)
+  blurMat.opacity = blurOpacity
+  liveScene.screenBlurPatch.position.set(screenX - 0.04, clampedTopY * 0.48, 0)
+  liveScene.screenBlurPatch.scale.set(blurWidth, blurHeight, 1)
+  liveScene.screenBlurPatch.visible = true
+}
+
+function createReusableFocusMarkers() {
+  const items = [
+    { label: 'F', color: '#ffd166' },
+    { label: 'F', color: '#ffd166' },
+    { label: '2F', color: '#ff9f43' },
+    { label: '2F', color: '#ff9f43' },
+  ]
+
+  liveScene.focusMarks = items.map(item => {
+    const group = new THREE.Group()
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), new THREE.MeshBasicMaterial({ color: item.color }))
+    group.add(sphere)
+
+    const tick = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.006, 0.006, 0.36, 8),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(item.color).getHex(), transparent: true, opacity: 0.7 }),
+    )
+    tick.rotation.z = 0
+    group.add(tick)
+
+    const labelY = item.label === 'F' ? 0.58 : 0.82
+    group.add(makeTextSprite(item.label, item.color, new THREE.Vector3(0, labelY, 0), 0.82, 46))
+    dynamicGroup.add(group)
+    return group
+  })
+}
+
+function updateLiveFocusMarkers(f: number) {
+  const xs = [-cmToX(f), cmToX(f), -cmToX(2 * f), cmToX(2 * f)]
+  liveScene.focusMarks.forEach((mark, index) => {
+    const x = xs[index]
+    mark.position.set(x, 0, 0)
+    mark.visible = showLabels.value && x >= MIN_X && x <= MAX_X
+  })
+}
+
+function createLiveLine(color: number, opacity = 0.9, options: { depthTest?: boolean; depthWrite?: boolean } = {}) {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3))
+  const material = new THREE.LineBasicMaterial({
+    color,
+    transparent: opacity < 1,
+    opacity,
+    depthTest: options.depthTest ?? true,
+    depthWrite: options.depthWrite ?? true,
+  })
+  const line = new THREE.Line(geometry, material)
+  line.visible = false
+  // 光线端点频繁变化，关闭视锥剔除后无需每帧 computeBoundingSphere。
+  line.frustumCulled = false
+  return line
+}
+
+function setLiveLine(line: THREE.Line | null, start: THREE.Vector3, end: THREE.Vector3, visible = true) {
+  if (!line) return
+  if (!visible || !isFiniteVector(start) || !isFiniteVector(end) || start.distanceToSquared(end) < 0.000001) {
+    line.visible = false
+    return
+  }
+  const attr = line.geometry.getAttribute('position') as THREE.BufferAttribute
+  const arr = attr.array as Float32Array
+  arr[0] = start.x
+  arr[1] = start.y
+  arr[2] = start.z
+  arr[3] = end.x
+  arr[4] = end.y
+  arr[5] = end.z
+  attr.needsUpdate = true
+  line.visible = true
+}
+
+function isFiniteVector(v: THREE.Vector3) {
+  return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)
+}
+
+function createReusableDimensionSegments() {
+  liveScene.objectDim = createLiveLine(0xffd166, 0.88)
+  liveScene.imageDim = createLiveLine(0x34d9ff, 0.88)
+  liveScene.objectDimStart = createLiveLine(0xffd166, 0.82)
+  liveScene.objectDimEnd = createLiveLine(0xffd166, 0.82)
+  liveScene.imageDimStart = createLiveLine(0x34d9ff, 0.82)
+  liveScene.imageDimEnd = createLiveLine(0x34d9ff, 0.82)
+  ;[
+    liveScene.objectDim,
+    liveScene.imageDim,
+    liveScene.objectDimStart,
+    liveScene.objectDimEnd,
+    liveScene.imageDimStart,
+    liveScene.imageDimEnd,
+  ].forEach(line => {
+    if (line) dynamicGroup.add(line)
+  })
+}
+
+function updateLiveDimensionSegments(m: OpticalMetrics, objectX: number, imageX: number, canShowImage: boolean) {
+  if (!showDimensions.value) {
+    ;[
+      liveScene.objectDim,
+      liveScene.objectDimStart,
+      liveScene.objectDimEnd,
+      liveScene.imageDim,
+      liveScene.imageDimStart,
+      liveScene.imageDimEnd,
+    ].forEach(line => {
+      if (line) line.visible = false
+    })
+    return
+  }
+
+  setLiveLine(liveScene.objectDim, new THREE.Vector3(objectX, -1.02, 1.08), new THREE.Vector3(0, -1.02, 1.08), true)
+  setLiveLine(liveScene.objectDimStart, new THREE.Vector3(objectX, -1.09, 1.08), new THREE.Vector3(objectX, -0.95, 1.08), true)
+  setLiveLine(liveScene.objectDimEnd, new THREE.Vector3(0, -1.09, 1.08), new THREE.Vector3(0, -0.95, 1.08), true)
+
+  const showImageDim = Number.isFinite(m.v) && canShowImage
+  const color = m.real ? 0x34d9ff : 0xff6b7a
+  const imageLines = [liveScene.imageDim, liveScene.imageDimStart, liveScene.imageDimEnd]
+  imageLines.forEach(line => {
+    if (line) (line.material as THREE.LineBasicMaterial).color.setHex(color)
+  })
+  setLiveLine(liveScene.imageDim, new THREE.Vector3(0, -1.24, 1.08), new THREE.Vector3(imageX, -1.24, 1.08), showImageDim)
+  setLiveLine(liveScene.imageDimStart, new THREE.Vector3(0, -1.31, 1.08), new THREE.Vector3(0, -1.17, 1.08), showImageDim)
+  setLiveLine(liveScene.imageDimEnd, new THREE.Vector3(imageX, -1.31, 1.08), new THREE.Vector3(imageX, -1.17, 1.08), showImageDim)
+}
+
+function createReusableRaySegments() {
+  liveScene.rays.yellowIn = createLiveRaySegment(0xffd166, 0.95)
+  liveScene.rays.yellowOut = createLiveRaySegment(0xffd166, 0.95)
+  liveScene.rays.cyanMain = createLiveRaySegment(0x34d9ff, 0.95)
+  liveScene.rays.greenIn = createLiveRaySegment(0x64f4ac, 0.95)
+  liveScene.rays.greenOut = createLiveRaySegment(0x64f4ac, 0.95)
+  // 虚像反向延长线常会和蓝色过光心线共线。
+  // 关闭深度测试/写入，再配合轻微 z 偏移，避免拖动 u<f 时两条线 z-fighting 闪烁。
+  liveScene.rays.redExt1 = createLiveRaySegment(0xff6b7a, 0.62, { depthTest: false, depthWrite: false })
+  liveScene.rays.redExt2 = createLiveRaySegment(0xff6b7a, 0.62, { depthTest: false, depthWrite: false })
+
+  Object.values(liveScene.rays).forEach(segment => {
+    rayGroup.add(segment.line)
+    rayGroup.add(segment.arrow)
+  })
+}
+
+function createLiveRaySegment(color: number, opacity = 1, options: { depthTest?: boolean; depthWrite?: boolean } = {}): LiveRaySegment {
+  const line = createLiveLine(color, opacity, options) as THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>
+  const arrow = new THREE.Mesh(
+    new THREE.ConeGeometry(0.055, 0.14, 16),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: opacity < 1,
+      opacity,
+      depthTest: options.depthTest ?? true,
+      depthWrite: options.depthWrite ?? true,
+    }),
+  )
+  arrow.visible = false
+  arrow.frustumCulled = false
+  return { line, arrow }
+}
+
+function setLiveRaySegment(segment: LiveRaySegment, start: THREE.Vector3, end: THREE.Vector3, visible = true) {
+  setLiveLine(segment.line, start, end, visible)
+  if (!segment.line.visible) {
+    segment.arrow.visible = false
+    return
+  }
+  const dir = new THREE.Vector3().subVectors(end, start)
+  if (dir.lengthSq() < 0.000001) {
+    segment.arrow.visible = false
+    return
+  }
+  dir.normalize()
+  segment.arrow.position.copy(end).addScaledVector(dir, -0.14 * 0.45)
+  segment.arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
+  segment.arrow.visible = true
+}
+
+function hideLiveRaySegment(segment: LiveRaySegment) {
+  segment.line.visible = false
+  segment.arrow.visible = false
+}
+
+function createReusableLabels() {
+  // 这些 Sprite 只创建一次；拖动时只移动和显隐，不重建 CanvasTexture。
+  liveScene.objectLabel = makeTextSprite('发光蜡烛', '#ffd166', new THREE.Vector3(), 0.78, 44)
+  liveScene.imageLabel = makeTextSprite('像', '#34d9ff', new THREE.Vector3(), 0.72, 40)
+  liveScene.screenLabel = makeTextSprite('光屏 / 承接实像', '#ffffff', new THREE.Vector3(), 0.72, 40)
+  liveScene.focusStatusLabel = makeTextSprite('清晰度', '#7ee8ff', new THREE.Vector3(), 0.58, 34)
+  liveScene.objectDimLabel = makeTextSprite('物距 u', '#ffd166', new THREE.Vector3(), 0.58, 34)
+  liveScene.imageDimLabel = makeTextSprite('像距 v', '#34d9ff', new THREE.Vector3(), 0.58, 34)
+  liveScene.infiniteTipLabel = makeTextSprite('出射光线彼此近似平行\n像距趋于无穷远', '#ffdf87', new THREE.Vector3(2.35, 1.95, 0.78), 0.92, 40)
+  liveScene.outOfRangeTipLabel = makeTextSprite(
+    '真实像距已超过光具座\n请调整参数或拉远观察',
+    '#34d9ff',
+    new THREE.Vector3(MAX_X - 2.0, 2.7, 1.18),
+    0.66,
+    38,
+  )
+  liveScene.appLabel = makeTextSprite('应用模式', '#7ee8ff', new THREE.Vector3(), 0.58, 34)
+  ;[
+    liveScene.objectLabel,
+    liveScene.imageLabel,
+    liveScene.screenLabel,
+    liveScene.focusStatusLabel,
+    liveScene.objectDimLabel,
+    liveScene.imageDimLabel,
+    liveScene.infiniteTipLabel,
+    liveScene.outOfRangeTipLabel,
+    liveScene.appLabel,
+  ].forEach(label => {
+    if (label) labelGroup.add(label)
+  })
+
+  // 刻度文字也只创建一次，不跟着拖动重建。
   for (let cm = -120; cm <= 120; cm += 30) {
     if (cm === 0) continue
     const x = cmToX(cm)
     labelGroup.add(makeTextSprite(`${Math.abs(cm)}cm`, 'rgba(222,245,255,0.86)', new THREE.Vector3(x, -0.22, -0.92), 0.42, 28))
   }
+
+  labelGroup.add(makeTextSprite('光心 O', '#ffffff', new THREE.Vector3(0.58, 0.72, 0), 0.72, 42))
+  labelGroup.add(makeTextSprite('主光轴', '#eaf7ff', new THREE.Vector3(MAX_X - 0.55, 0.48, 1.16), 0.68, 40))
 }
 
-function createFocusMarkers(f: number) {
-  const items = [
-    { x: -cmToX(f), label: 'F', color: '#ffd166' },
-    { x: cmToX(f), label: 'F', color: '#ffd166' },
-    { x: -cmToX(2 * f), label: '2F', color: '#ff9f43' },
-    { x: cmToX(2 * f), label: '2F', color: '#ff9f43' },
-  ]
+function updateLiveLabels(
+  m: OpticalMetrics,
+  objectX: number,
+  objectTopY: number,
+  imageX: number,
+  imageTopY: number,
+  canShowImage: boolean,
+  imageOutOfRange: boolean,
+  virtualOutOfRange: boolean,
+  rawImageX: number,
+) {
+  if (liveScene.objectLabel) {
+    liveScene.objectLabel.position.copy(getCandleLabelPosition(objectX, objectTopY, 0.82))
+    liveScene.objectLabel.visible = showLabels.value
+  }
 
-  items.forEach(item => {
-    if (item.x < MIN_X || item.x > MAX_X) return
-    const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), new THREE.MeshBasicMaterial({ color: item.color }))
-    sphere.position.set(item.x, 0, 0)
-    dynamicGroup.add(sphere)
-    addTube(dynamicGroup, new THREE.Vector3(item.x, -0.18, 0), new THREE.Vector3(item.x, 0.18, 0), 0.006, new THREE.Color(item.color).getHex(), 0.7)
-    // 焦点文字直接压在对应焦点球体的正上方：x / z 与球体完全一致，只改 y。
-    // 不再为了避开 mesh 改 z，文字 Sprite 已 depthTest=false，不会被遮挡。
-    const labelY = item.label === 'F' ? 0.58 : 0.82
-    labelGroup.add(makeTextSprite(item.label, item.color, new THREE.Vector3(item.x, labelY, 0), 0.82, 46))
-  })
+  if (liveScene.imageLabel) {
+    // 像的位置在 2F 附近时，"像"标签很容易和 F / 2F 焦点标识重叠。
+    // 这里不重建 Sprite，只动态调整标签位置，让课堂演示时标注始终清楚。
+    liveScene.imageLabel.position.copy(getImageLabelPosition(m, imageX, imageTopY))
+    liveScene.imageLabel.visible = showLabels.value && canShowImage
+  }
+
+  if (liveScene.screenLabel) {
+    const screenX = cmToX(focusChallenge.value ? state.screenCm : m.v)
+    liveScene.screenLabel.position.set(screenX, 2.55, 1.16)
+    liveScene.screenLabel.visible = showLabels.value && showScreen.value && m.real && Number.isFinite(m.v) && screenX >= MIN_X && screenX <= MAX_X
+  }
+
+  if (liveScene.focusStatusLabel) {
+    const screenX = cmToX(state.screenCm)
+    liveScene.focusStatusLabel.position.set(screenX, 2.92, 0)
+    liveScene.focusStatusLabel.visible =
+      showLabels.value && focusChallenge.value && m.real && Number.isFinite(m.v) && screenX >= MIN_X && screenX <= MAX_X
+  }
+
+  if (liveScene.objectDimLabel) {
+    liveScene.objectDimLabel.position.set(objectX * 0.5, -1.08, 1.08)
+    liveScene.objectDimLabel.visible = showLabels.value && showDimensions.value
+  }
+
+  if (liveScene.imageDimLabel) {
+    liveScene.imageDimLabel.position.set(imageX * 0.5, -1.3, 1.08)
+    liveScene.imageDimLabel.visible = showLabels.value && showDimensions.value && canShowImage
+  }
+
+  if (liveScene.infiniteTipLabel) {
+    liveScene.infiniteTipLabel.visible = showLabels.value && !Number.isFinite(m.v)
+  }
+
+  if (liveScene.outOfRangeTipLabel) {
+    liveScene.outOfRangeTipLabel.position.copy(
+      virtualOutOfRange ? getVirtualOutOfRangeTipPosition(rawImageX) : new THREE.Vector3(MAX_X - 2.0, 2.7, 1.18),
+    )
+    liveScene.outOfRangeTipLabel.visible = showLabels.value && Number.isFinite(m.v) && (imageOutOfRange || virtualOutOfRange)
+  }
 }
 
-function createObjectArrow(x: number, topY: number) {
-  // 教材里凸透镜成像常用“蜡烛”做物体，比单纯箭头更接近真实实验。
-  createCandleModel(dynamicGroup, {
-    x,
-    topY,
-    bodyColor: 0xfff1c2,
-    bodyAccentColor: 0xffd166,
-    flameColor: 0xff9f43,
-    glowColor: 0xffd166,
-    opacity: 1,
-    radiusScale: 1,
-    withLight: true,
-  })
-  // 物距已经由下方尺寸线标出，这里只保留“蜡烛”身份标签。
-  // 标签的 x 坐标严格使用蜡烛 x，y 坐标按蜡烛真实视觉顶部计算，保证文字在蜡烛正上方。
-  labelGroup.add(makeTextSprite('发光蜡烛', '#ffd166', getCandleLabelPosition(x, topY, 0.82), 0.78, 44))
+function createReusableApplicationModels() {
+  liveScene.cameraModel = createSimpleCameraModel()
+  liveScene.projectorModel = createSimpleProjectorModel()
+  liveScene.magnifierModel = createSimpleMagnifierModel()
+  dynamicGroup.add(liveScene.cameraModel, liveScene.projectorModel, liveScene.magnifierModel)
+}
+
+function updateLiveApplicationModels(objectX: number, imageX: number) {
+  const showCamera = appMode.value === 'camera'
+  const showProjector = appMode.value === 'projector'
+  const showMagnifier = appMode.value === 'magnifier'
+
+  if (liveScene.cameraModel) {
+    liveScene.cameraModel.position.set(Math.min(MAX_X - 1.25, imageX + 0.75), 0.33, -1.34)
+    liveScene.cameraModel.visible = showCamera
+  }
+  if (liveScene.projectorModel) {
+    liveScene.projectorModel.position.set(objectX - 0.55, 0.28, -1.34)
+    liveScene.projectorModel.visible = showProjector
+  }
+  if (liveScene.magnifierModel) {
+    liveScene.magnifierModel.position.set(0.62, 0.72, -1.3)
+    liveScene.magnifierModel.visible = showMagnifier
+  }
+  if (liveScene.appLabel) {
+    const textPosition = showCamera
+      ? new THREE.Vector3(Math.min(MAX_X - 1.25, imageX + 0.75), 1.35, -1.34)
+      : showProjector
+        ? new THREE.Vector3(objectX - 0.55, 1.25, -1.34)
+        : new THREE.Vector3(0.62, 1.8, -1.3)
+    liveScene.appLabel.position.copy(textPosition)
+    liveScene.appLabel.visible = showLabels.value && appMode.value !== 'bench'
+  }
+}
+
+function createSimpleCameraModel() {
+  const group = new THREE.Group()
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x132b46, roughness: 0.42, metalness: 0.34, emissive: 0x071827, emissiveIntensity: 0.38 })
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.52, 0.42), bodyMat)
+  body.castShadow = true
+  group.add(body)
+  const lensOuter = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.25, 0.24, 36),
+    new THREE.MeshStandardMaterial({ color: 0x0b1422, roughness: 0.28, metalness: 0.55 }),
+  )
+  lensOuter.rotation.x = Math.PI / 2
+  lensOuter.position.set(-0.1, 0, 0.33)
+  group.add(lensOuter)
+  const lensGlass = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.15, 0.03, 36),
+    new THREE.MeshBasicMaterial({ color: 0x34d9ff, transparent: true, opacity: 0.78, blending: THREE.AdditiveBlending }),
+  )
+  lensGlass.rotation.x = Math.PI / 2
+  lensGlass.position.set(-0.1, 0, 0.47)
+  group.add(lensGlass)
+  const flash = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.08, 0.045), new THREE.MeshBasicMaterial({ color: 0xffd166 }))
+  flash.position.set(-0.31, 0.19, 0.24)
+  group.add(flash)
+  group.visible = false
+  return group
+}
+
+function createSimpleProjectorModel() {
+  const group = new THREE.Group()
+  const mat = new THREE.MeshStandardMaterial({ color: 0x16283d, roughness: 0.46, metalness: 0.26, emissive: 0x101e30, emissiveIntensity: 0.38 })
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.34, 0.58), mat)
+  body.castShadow = true
+  group.add(body)
+  const lens = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 0.035, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.86, blending: THREE.AdditiveBlending }),
+  )
+  lens.rotation.x = Math.PI / 2
+  lens.position.set(0.46, 0.04, 0.43)
+  group.add(lens)
+  const coneLength = 1.85
+  const cone = new THREE.Mesh(
+    new THREE.ConeGeometry(0.48, coneLength, 32, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd166,
+      transparent: true,
+      opacity: 0.12,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  )
+  cone.rotation.x = -Math.PI / 2
+  cone.position.set(0.46, 0.04, 0.43 + coneLength / 2)
+  group.add(cone)
+  group.visible = false
+  return group
+}
+
+function createSimpleMagnifierModel() {
+  const group = new THREE.Group()
+
+  // 镜框与镜片默认在 x-y 平面，面向相机。
+  const ringRadius = 0.4
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(ringRadius, 0.028, 18, 72),
+    new THREE.MeshBasicMaterial({ color: 0x7ee8ff, transparent: true, opacity: 0.92 }),
+  )
+  group.add(ring)
+
+  const glass = new THREE.Mesh(
+    new THREE.CircleGeometry(0.36, 64),
+    new THREE.MeshBasicMaterial({ color: 0x8feeff, transparent: true, opacity: 0.24, side: THREE.DoubleSide }),
+  )
+  group.add(glass)
+
+  // 手柄必须从镜框右下角接出去。
+  // CylinderGeometry 默认沿局部 Y 轴延伸；rotation.z = -3π/4 后，局部 Y 轴方向变成右下方。
+  const handleLength = 0.95
+  const handleDir = new THREE.Vector3(Math.SQRT1_2, -Math.SQRT1_2, 0)
+  const jointPos = handleDir.clone().multiplyScalar(ringRadius - 0.01)
+  const handleCenter = jointPos.clone().add(handleDir.clone().multiplyScalar(handleLength / 2))
+
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.068, handleLength, 18),
+    new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.96 }),
+  )
+  handle.position.copy(handleCenter)
+  handle.rotation.z = -Math.PI * 0.75
+  group.add(handle)
+
+  // 加一个连接铆钉，保证视觉上“柄”和“镜框”是连在一起的。
+  const joint = new THREE.Mesh(
+    new THREE.SphereGeometry(0.078, 20, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.98 }),
+  )
+  joint.position.copy(jointPos)
+  group.add(joint)
+
+  // 手柄末端略粗一点，更像真实放大镜握柄。
+  const gripLength = 0.28
+  const gripCenter = jointPos.clone().add(handleDir.clone().multiplyScalar(handleLength + gripLength / 2 - 0.03))
+  const grip = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.072, 0.085, gripLength, 18),
+    new THREE.MeshBasicMaterial({ color: 0x9b6a2f, transparent: true, opacity: 0.98 }),
+  )
+  grip.position.copy(gripCenter)
+  grip.rotation.z = -Math.PI * 0.75
+  group.add(grip)
+
+  group.visible = false
+  return group
+}
+
+function withRayZ(v: THREE.Vector3, z: number) {
+  return new THREE.Vector3(v.x, v.y, z)
+}
+
+function updateLiveRays(m: OpticalMetrics, objectX: number, objectY: number, imageX: number, imageY: number, virtualOutOfRange = false) {
+  Object.values(liveScene.rays).forEach(hideLiveRaySegment)
+  if (!showRays.value) return
+
+  const obj = new THREE.Vector3(objectX, objectY, 0)
+  const lensAtObjY = new THREE.Vector3(0, objectY, 0)
+  const center = new THREE.Vector3(0, 0, 0)
+  const leftF = new THREE.Vector3(-cmToX(m.f), 0, 0)
+  const rightF = new THREE.Vector3(cmToX(m.f), 0, 0)
+  const exitX = MAX_X
+
+  if (!Number.isFinite(m.v)) {
+    setLiveRaySegment(liveScene.rays.yellowIn, obj, lensAtObjY, true)
+    setLiveRaySegment(liveScene.rays.yellowOut, lensAtObjY, new THREE.Vector3(exitX, yOnLine(lensAtObjY, rightF, exitX), 0), true)
+    setLiveRaySegment(liveScene.rays.cyanMain, obj, new THREE.Vector3(exitX, yOnLine(obj, center, exitX), 0), true)
+
+    const yAtLens = yOnLine(obj, leftF, 0)
+    const lensAtFocal = new THREE.Vector3(0, yAtLens, 0)
+    setLiveRaySegment(liveScene.rays.greenIn, obj, lensAtFocal, true)
+    setLiveRaySegment(liveScene.rays.greenOut, lensAtFocal, new THREE.Vector3(exitX, yAtLens, 0), true)
+    return
+  }
+
+  const img = new THREE.Vector3(imageX, imageY, 0)
+
+  if (m.real) {
+    setLiveRaySegment(liveScene.rays.yellowIn, obj, lensAtObjY, true)
+    setLiveRaySegment(liveScene.rays.yellowOut, lensAtObjY, clipTowardScene(lensAtObjY, img), true)
+    setLiveRaySegment(liveScene.rays.cyanMain, obj, clipTowardScene(obj, img), true)
+
+    const yAtLens = yOnLine(obj, leftF, 0)
+    const lensAtFocal = new THREE.Vector3(0, yAtLens, 0)
+    setLiveRaySegment(liveScene.rays.greenIn, obj, lensAtFocal, true)
+    setLiveRaySegment(liveScene.rays.greenOut, lensAtFocal, clipTowardScene(lensAtFocal, img), true)
+    return
+  }
+
+  const yParallelExit = yOnLine(lensAtObjY, img, exitX)
+  setLiveRaySegment(liveScene.rays.yellowIn, obj, lensAtObjY, true)
+  setLiveRaySegment(liveScene.rays.yellowOut, lensAtObjY, new THREE.Vector3(exitX, yParallelExit, 0), true)
+  const extensionZ = 0.025
+  if (!virtualOutOfRange) setLiveRaySegment(liveScene.rays.redExt1, withRayZ(img, extensionZ), withRayZ(lensAtObjY, extensionZ), true)
+
+  const yCenterExit = yOnLine(center, img, exitX)
+  setLiveRaySegment(liveScene.rays.cyanMain, obj, new THREE.Vector3(exitX, yCenterExit, 0), true)
+  if (!virtualOutOfRange) setLiveRaySegment(liveScene.rays.redExt2, withRayZ(img, extensionZ), withRayZ(center, extensionZ), true)
+
+  const yAtLens = yOnLine(obj, leftF, 0)
+  const lensAtFocal = new THREE.Vector3(0, yAtLens, 0)
+  const yFocalExit = yOnLine(lensAtFocal, img, exitX)
+  setLiveRaySegment(liveScene.rays.greenIn, obj, lensAtFocal, true)
+  setLiveRaySegment(liveScene.rays.greenOut, lensAtFocal, new THREE.Vector3(exitX, yFocalExit, 0), true)
 }
 
 function getCandleLabelY(topY: number, offset = 0.78) {
@@ -1676,550 +2409,39 @@ function getCandleLabelPosition(x: number, topY: number, offset = 0.78) {
   return new THREE.Vector3(x, getCandleLabelY(topY, offset), 0)
 }
 
-function createImageArrow(x: number, topY: number, real: boolean, compressed = false) {
-  if (x < MIN_X || x > MAX_X) return
+function getImageLabelPosition(m: OpticalMetrics, imageX: number, imageTopY: number) {
+  // “像”标签不能套用物体蜡烛的通用上方标签逻辑。
+  // 倒立实像时，像蜡烛主体在主光轴下方，标签也要跟到下方附近；
+  // 正立虚像时，像蜡烛在上方，标签放在上方附近。
+  const isInvertedImage = imageTopY < 0
+  const position = isInvertedImage ? new THREE.Vector3(imageX, imageTopY - 0.58, 0.26) : getCandleLabelPosition(imageX, imageTopY, 0.78)
 
-  // 实像 / 虚像都继续用“蜡烛像”，只通过透明度、标签和辅助线区分。
-  // 这样学生看到的是同一种物体的成像变化，而不是突然变成另一个图形。
-  createCandleModel(dynamicGroup, {
-    x,
-    topY,
-    bodyColor: 0xfff1c2,
-    bodyAccentColor: real ? 0x34d9ff : 0xff6b7a,
-    flameColor: 0xff9f43,
-    glowColor: real ? 0x34d9ff : 0xff6b7a,
-    opacity: real ? 0.78 : 0.48,
-    radiusScale: 1,
-    withLight: false,
-    ghost: !real,
-  })
+  if (!Number.isFinite(m.v)) return position
 
-  if (real) {
-    createProjectedImagePatch(x, topY)
-  } else {
-    createVirtualImageHalo(x, topY)
-  }
+  const focusXs = [-cmToX(m.f), cmToX(m.f), -cmToX(2 * m.f), cmToX(2 * m.f)]
+  const nearFocusLabel = focusXs.some(x => Math.abs(position.x - x) < 0.46)
 
-  // 像的文字也按蜡烛像的外轮廓放置，不再用固定偏移，避免看起来不在像的正上方。
-  labelGroup.add(makeTextSprite(real ? '倒立实像' : '正立虚像', real ? '#34d9ff' : '#ff6b7a', getCandleLabelPosition(x, topY, 0.78), 0.72, 40))
-}
-
-type CandleOptions = {
-  x: number
-  topY: number
-  bodyColor: number
-  bodyAccentColor: number
-  flameColor: number
-  glowColor: number
-  opacity?: number
-  radiusScale?: number
-  withLight?: boolean
-  ghost?: boolean
-}
-
-function createCandleModel(group: THREE.Group, options: CandleOptions) {
-  const sign = options.topY >= 0 ? 1 : -1
-  const absH = Math.max(Math.abs(options.topY), 0.22)
-  const opacity = options.opacity ?? 1
-  const radiusScale = options.radiusScale ?? 1
-  const bodyHeight = Math.max(0.16, absH * 0.68)
-  const flameHeight = Math.max(0.12, absH * 0.22)
-  const wickHeight = Math.max(0.035, absH * 0.06)
-  const radius = Math.max(0.045, Math.min(0.085, absH * 0.11)) * radiusScale
-  const transparent = opacity < 1
-
-  const waxMat = new THREE.MeshStandardMaterial({
-    color: options.bodyColor,
-    roughness: 0.55,
-    metalness: 0.02,
-    transparent,
-    opacity,
-    emissive: options.ghost ? options.bodyAccentColor : 0x000000,
-    emissiveIntensity: options.ghost ? 0.18 : 0,
-  })
-
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.92, radius, bodyHeight, 28), waxMat)
-  body.position.set(options.x, sign * bodyHeight * 0.5, 0)
-  body.castShadow = true
-  body.receiveShadow = true
-  group.add(body)
-
-  const rimMat = new THREE.MeshBasicMaterial({ color: options.bodyAccentColor, transparent: true, opacity: Math.min(0.9, opacity + 0.12) })
-  const topRim = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.96, radius * 0.08, 8, 32), rimMat)
-  topRim.rotation.x = Math.PI / 2
-  topRim.position.set(options.x, sign * bodyHeight, 0)
-  group.add(topRim)
-
-  const base = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius * 1.55, radius * 1.7, 0.045, 28),
-    new THREE.MeshStandardMaterial({
-      color: options.bodyAccentColor,
-      roughness: 0.45,
-      metalness: 0.18,
-      transparent,
-      opacity: Math.min(0.82, opacity),
-    }),
-  )
-  base.position.set(options.x, sign * 0.022, 0)
-  group.add(base)
-
-  const wickStart = new THREE.Vector3(options.x, sign * bodyHeight, 0)
-  const wickEnd = new THREE.Vector3(options.x, sign * (bodyHeight + wickHeight), 0)
-  addTube(group, wickStart, wickEnd, radius * 0.11, 0x1b1b1b, opacity)
-
-  const flameMat = new THREE.MeshBasicMaterial({
-    color: options.flameColor,
-    transparent: true,
-    opacity: Math.min(0.95, opacity + 0.08),
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  })
-  const flame = new THREE.Mesh(new THREE.ConeGeometry(radius * 1.1, flameHeight, 24), flameMat)
-  flame.position.set(options.x, sign * (bodyHeight + wickHeight + flameHeight * 0.5), 0)
-  if (sign < 0) flame.rotation.z = Math.PI
-  group.add(flame)
-
-  const innerFlame = new THREE.Mesh(
-    new THREE.ConeGeometry(radius * 0.56, flameHeight * 0.62, 20),
-    new THREE.MeshBasicMaterial({
-      color: 0xfff3a0,
-      transparent: true,
-      opacity: Math.min(0.9, opacity),
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  )
-  innerFlame.position.set(options.x, sign * (bodyHeight + wickHeight + flameHeight * 0.46), 0.006)
-  if (sign < 0) innerFlame.rotation.z = Math.PI
-  group.add(innerFlame)
-
-  const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(flameHeight * 0.75, 20, 14),
-    new THREE.MeshBasicMaterial({
-      color: options.glowColor,
-      transparent: true,
-      opacity: options.ghost ? 0.12 : 0.2,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  )
-  glow.scale.set(0.75, 1.15, 0.75)
-  glow.position.set(options.x, sign * (bodyHeight + wickHeight + flameHeight * 0.5), 0)
-  group.add(glow)
-
-  if (options.withLight) {
-    const flameLight = new THREE.PointLight(options.glowColor, 0.8, 2.1)
-    flameLight.position.set(options.x, sign * (bodyHeight + wickHeight + flameHeight * 0.5), 0.08)
-    group.add(flameLight)
-  }
-}
-
-function createProjectedImagePatch(x: number, topY: number) {
-  const height = Math.max(0.28, Math.abs(topY) + 0.28)
-  const patch = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.52, height),
-    new THREE.MeshBasicMaterial({
-      color: 0x34d9ff,
-      transparent: true,
-      opacity: 0.18,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-  )
-  patch.rotation.y = Math.PI / 2
-  patch.position.set(x + 0.012, topY * 0.5, -0.018)
-  dynamicGroup.add(patch)
-}
-
-function createVirtualImageHalo(x: number, topY: number) {
-  const height = Math.max(0.32, Math.abs(topY) + 0.28)
-  const halo = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.62, height),
-    new THREE.MeshBasicMaterial({
-      color: 0xff6b7a,
-      transparent: true,
-      opacity: 0.13,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-  )
-  halo.rotation.y = Math.PI / 2
-  halo.position.set(x - 0.012, topY * 0.5, 0.028)
-  dynamicGroup.add(halo)
-}
-
-function createSceneAnnotations(
-  m: OpticalMetrics,
-  objectX: number,
-  objectY: number,
-  imageX: number,
-  imageY: number,
-  compressedImage = false,
-  virtualOutOfRange = false,
-  rawImageX = imageX,
-) {
-  addDimensionSegment(new THREE.Vector3(objectX, -1.02, 1.08), new THREE.Vector3(0, -1.02, 1.08), '#ffd166', `物距 u = ${formatNumber(m.u)}cm`, 0.06)
-
-  if (Number.isFinite(m.v)) {
-    const label = m.real ? `像距 v = ${formatNumber(m.v)}cm` : `虚像距 |v| = ${formatNumber(Math.abs(m.v))}cm\n(v = ${formatNumber(m.v)}cm)`
-
-    if (virtualOutOfRange) {
-      // 只有 v 趋向无穷远 / 非有限值时才走这里。
-      // 有限的大虚像（例如 v=-323cm）会在真实位置直接绘制出来。
-      labelGroup.add(
-        makeTextSprite(
-          `虚像趋向无穷远
-v = ${formatNumber(m.v)}cm
-当前无法在有限光具座内绘制`,
-          '#ff6b7a',
-          getVirtualOutOfRangeTipPosition(rawImageX),
-          0.62,
-          36,
-        ),
-      )
-    } else {
-      addDimensionSegment(new THREE.Vector3(0, -1.24, 1.08), new THREE.Vector3(imageX, -1.24, 1.08), m.real ? '#34d9ff' : '#ff6b7a', label, 0.06)
-      if (m.virtual && Math.abs(m.v) > BENCH_LIMIT_CM * 0.65) {
-        labelGroup.add(
-          makeTextSprite(
-            `虚像按真实位置绘制
-距透镜 ${formatNumber(Math.abs(m.v))}cm，可切换俯视或稍微拉远观察`,
-            '#ff6b7a',
-            new THREE.Vector3(imageX, Math.min(Math.max(imageY + 1.6, 2.0), MAX_DISPLAY_IMAGE_Y - 1.0), 1.18),
-            0.62,
-            36,
-          ),
-        )
-      }
+  if (isInvertedImage) {
+    // 倒立实像常在光轴下方，不能再把标签抬到 2F/F 标签区。
+    // 只做水平错开，让“像”仍然跟随蜡烛下方。
+    if (nearFocusLabel) {
+      position.x += position.x >= 0 ? 0.38 : -0.38
+      position.z = 0.42
     }
-
-    if (compressedImage) {
-      labelGroup.add(makeTextSprite('真实像距或像高较大\n光屏边缘提示显示', '#34d9ff', new THREE.Vector3(imageX, 1.98, 1.18), 0.54, 32))
-      addTube(dynamicGroup, new THREE.Vector3(imageX - 0.18, -0.2, -0.34), new THREE.Vector3(imageX + 0.18, -0.2, -0.34), 0.01, 0x34d9ff, 0.92)
-      addTube(dynamicGroup, new THREE.Vector3(imageX - 0.08, -0.28, -0.34), new THREE.Vector3(imageX + 0.28, -0.28, -0.34), 0.01, 0x34d9ff, 0.72)
-    }
+    return position
   }
 
-  // 多余的焦距 f 文字和短竖线已去掉，只保留 F / 2F 焦点标识。
+  const inFocusLabelHeightBand = position.y > 0.38 && position.y < 1.28
 
-  // 光心 O 放在透镜中心右侧：靠近光心，但不压进透明透镜里。
-  // z 不偏移，避免斜视角下投影跑偏。
-  labelGroup.add(makeTextSprite('光心 O', '#ffffff', new THREE.Vector3(0.58, 0.72, 0), 0.72, 42))
-  labelGroup.add(makeTextSprite('主光轴', '#eaf7ff', new THREE.Vector3(MAX_X - 0.55, 0.48, 1.16), 0.68, 40))
-
-  if (showRays.value && Number.isFinite(m.v)) {
-    createAngleMarker(objectX, objectY, imageX, imageY, m.real, virtualOutOfRange)
-  }
-}
-
-function createFocalDistanceSegments(_f: number) {
-  // 已取消独立“焦距 f”短竖线，避免和 F / 2F、物距、像距标签混在一起。
-  // 焦距位置直接通过 F、2F 焦点球体和上方文字表达。
-}
-
-function addDimensionSegment(start: THREE.Vector3, end: THREE.Vector3, color: string, label: string, labelYOffset = 0.14) {
-  const hex = new THREE.Color(color).getHex()
-  addTube(dynamicGroup, start, end, 0.009, hex, 0.88)
-  addTube(dynamicGroup, new THREE.Vector3(start.x, start.y - 0.07, start.z), new THREE.Vector3(start.x, start.y + 0.07, start.z), 0.006, hex, 0.8)
-  addTube(dynamicGroup, new THREE.Vector3(end.x, end.y - 0.07, end.z), new THREE.Vector3(end.x, end.y + 0.07, end.z), 0.006, hex, 0.8)
-  addConeArrow(dynamicGroup, start, end, hex, 0.035, 0.09)
-  addConeArrow(dynamicGroup, end, start, hex, 0.035, 0.09)
-  const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5)
-  labelGroup.add(makeTextSprite(label, color, new THREE.Vector3(mid.x, mid.y - labelYOffset, mid.z), 0.58, 34))
-}
-
-function createAngleMarker(objectX: number, objectY: number, imageX: number, imageY: number, real: boolean, virtualOutOfRange = false) {
-  // 所有角度标注都放在真实光路所在的 x-y 平面上（z=0），不再用 z 前移。
-  // 文字 Sprite 不参与深度测试，所以不需要为了“看得见”去改 z。
-  if (!Number.isFinite(imageX)) return
-
-  const incidentLabelX = (objectX + 0) * 0.5
-  labelGroup.add(makeTextSprite('入射光线', '#ffd166', new THREE.Vector3(incidentLabelX, objectY + 0.34, 0), 0.62, 36))
-
-  const center = new THREE.Vector3(0, objectY, 0)
-  const angleRad = Math.atan2(Math.abs(imageY - objectY), Math.max(0.001, Math.abs(imageX)))
-  const signedAngle = imageY >= objectY ? angleRad : -angleRad
-  const angleDeg = (angleRad * 180) / Math.PI
-
-  addArcMarker(center, 0.42, 0, signedAngle, real ? 0x34d9ff : 0xff6b7a)
-  labelGroup.add(
-    makeTextSprite(
-      `∠出射光线与主光轴≈${formatNumber(angleDeg, 0)}°`,
-      real ? '#34d9ff' : '#ff6b7a',
-      getAngleLabelPosition(center, 0.82, signedAngle),
-      0.62,
-      34,
-    ),
-  )
-
-  if (!real && !virtualOutOfRange) {
-    labelGroup.add(makeTextSprite('反向延长线交点\n形成虚像', '#ff6b7a', new THREE.Vector3(imageX, getCandleLabelY(imageY, 1.18), 0), 0.68, 38))
-  }
-}
-
-function getAngleLabelPosition(center: THREE.Vector3, radius: number, endAngle: number) {
-  const midAngle = endAngle * 0.5
-  return new THREE.Vector3(center.x + Math.cos(midAngle) * radius, center.y + Math.sin(midAngle) * radius, center.z)
-}
-
-function addArcMarker(center: THREE.Vector3, radius: number, startAngle: number, endAngle: number, color: number) {
-  const points: THREE.Vector3[] = []
-  const steps = 30
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps
-    const a = startAngle + (endAngle - startAngle) * t
-    points.push(new THREE.Vector3(center.x + Math.cos(a) * radius, center.y + Math.sin(a) * radius, center.z))
-  }
-  const geo = new THREE.BufferGeometry().setFromPoints(points)
-  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.96, linewidth: 2 })
-  const arc = new THREE.Line(geo, mat)
-  arc.renderOrder = 30
-  dynamicGroup.add(arc)
-
-  // 弧线两端加两条短边，明确这是“∠”的夹角范围。
-  const a0 = new THREE.Vector3(center.x + Math.cos(startAngle) * radius, center.y + Math.sin(startAngle) * radius, center.z)
-  const a1 = new THREE.Vector3(center.x + Math.cos(endAngle) * radius, center.y + Math.sin(endAngle) * radius, center.z)
-  addTube(dynamicGroup, center, a0, 0.006, color, 0.78)
-  addTube(dynamicGroup, center, a1, 0.006, color, 0.78)
-}
-
-function createApplicationModeModel(m: OpticalMetrics, objectX: number, imageX: number) {
-  if (appMode.value === 'bench') return
-
-  if (appMode.value === 'camera') {
-    createCameraModel(new THREE.Vector3(Math.min(MAX_X - 1.25, imageX + 0.75), 0.33, -1.34))
-    labelGroup.add(
-      makeTextSprite('照相机：接收倒立缩小实像', '#7ee8ff', new THREE.Vector3(Math.min(MAX_X - 1.25, imageX + 0.75), 1.35, -1.34), 0.58, 34),
-    )
+  if (nearFocusLabel && inFocusLabelHeightBand) {
+    // 尤其是 u=2f 时，像刚好落在另一侧 2F，原本“像”和“2F”几乎同坐标。
+    // 对正立像才抬高并略向像所在一侧错开；倒立像已经在下方处理。
+    position.y = 1.46
+    position.x += position.x >= 0 ? 0.38 : -0.38
+    position.z = 0.42
   }
 
-  if (appMode.value === 'projector') {
-    createProjectorModel(new THREE.Vector3(objectX - 0.55, 0.28, -1.34))
-    labelGroup.add(makeTextSprite('投影仪：小物体放大到屏幕', '#ffd166', new THREE.Vector3(objectX - 0.55, 1.25, -1.34), 0.58, 34))
-  }
-
-  if (appMode.value === 'magnifier') {
-    createMagnifierModel(new THREE.Vector3(0.62, 0.72, -1.3))
-    labelGroup.add(makeTextSprite('放大镜：看到正立放大虚像', '#ff6b7a', new THREE.Vector3(0.62, 1.8, -1.3), 0.58, 34))
-  }
-}
-
-function createCameraModel(pos: THREE.Vector3) {
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: 0x132b46,
-    roughness: 0.42,
-    metalness: 0.34,
-    emissive: 0x071827,
-    emissiveIntensity: 0.38,
-  })
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.52, 0.42), bodyMat)
-  body.position.copy(pos)
-  body.castShadow = true
-  dynamicGroup.add(body)
-
-  const prism = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.2, 0.34), bodyMat)
-  prism.position.set(pos.x - 0.08, pos.y + 0.34, pos.z)
-  prism.rotation.z = 0.06
-  dynamicGroup.add(prism)
-
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.66, 0.4), bodyMat)
-  grip.position.set(pos.x + 0.43, pos.y - 0.04, pos.z)
-  dynamicGroup.add(grip)
-
-  const lensOuter = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.25, 0.24, 36),
-    new THREE.MeshStandardMaterial({ color: 0x0b1422, roughness: 0.28, metalness: 0.55, emissive: 0x06111f, emissiveIntensity: 0.25 }),
-  )
-  lensOuter.rotation.x = Math.PI / 2
-  lensOuter.position.set(pos.x - 0.1, pos.y, pos.z + 0.33)
-  dynamicGroup.add(lensOuter)
-
-  const lensGlass = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.15, 0.15, 0.03, 36),
-    new THREE.MeshBasicMaterial({ color: 0x34d9ff, transparent: true, opacity: 0.78, blending: THREE.AdditiveBlending }),
-  )
-  lensGlass.rotation.x = Math.PI / 2
-  lensGlass.position.set(pos.x - 0.1, pos.y, pos.z + 0.47)
-  dynamicGroup.add(lensGlass)
-
-  const flash = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.08, 0.045), new THREE.MeshBasicMaterial({ color: 0xffd166 }))
-  flash.position.set(pos.x - 0.31, pos.y + 0.19, pos.z + 0.24)
-  dynamicGroup.add(flash)
-
-  const shutter = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.035, 20), new THREE.MeshBasicMaterial({ color: 0xffd166 }))
-  shutter.rotation.x = Math.PI / 2
-  shutter.position.set(pos.x + 0.22, pos.y + 0.32, pos.z + 0.02)
-  dynamicGroup.add(shutter)
-}
-
-function createProjectorModel(pos: THREE.Vector3) {
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x16283d,
-    roughness: 0.46,
-    metalness: 0.26,
-    emissive: 0x101e30,
-    emissiveIntensity: 0.38,
-  })
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.34, 0.58), mat)
-  body.position.copy(pos)
-  body.castShadow = true
-  dynamicGroup.add(body)
-
-  const top = new THREE.Mesh(
-    new THREE.BoxGeometry(0.78, 0.08, 0.42),
-    new THREE.MeshStandardMaterial({ color: 0x203a58, roughness: 0.35, metalness: 0.28 }),
-  )
-  top.position.set(pos.x - 0.04, pos.y + 0.22, pos.z)
-  dynamicGroup.add(top)
-
-  const lensShell = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.16, 0.18, 0.2, 32),
-    new THREE.MeshStandardMaterial({ color: 0x0c1522, roughness: 0.28, metalness: 0.52, emissive: 0x221708, emissiveIntensity: 0.25 }),
-  )
-  lensShell.rotation.x = Math.PI / 2
-  lensShell.position.set(pos.x + 0.46, pos.y + 0.04, pos.z + 0.32)
-  dynamicGroup.add(lensShell)
-
-  const lens = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.12, 0.035, 28),
-    new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.86, blending: THREE.AdditiveBlending }),
-  )
-  lens.rotation.x = Math.PI / 2
-  lens.position.set(pos.x + 0.46, pos.y + 0.04, pos.z + 0.43)
-  dynamicGroup.add(lens)
-
-  // 投影仪镜头是朝 +Z 方向的：光锥的锥顶必须贴在镜头口，底面向投影幕方向展开。
-  // ConeGeometry 默认锥尖在 +Y 端、底面在 -Y 端；rotation.x = -PI/2 后，锥尖转到 -Z，底面转到 +Z。
-  // 因此把 cone center 放在镜头前方半个高度处，就能让锥顶刚好对准镜头。
-  const coneLength = 1.85
-  const cone = new THREE.Mesh(
-    new THREE.ConeGeometry(0.48, coneLength, 32, 1, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xffd166,
-      transparent: true,
-      opacity: 0.12,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  )
-  cone.rotation.x = -Math.PI / 2
-  cone.position.set(pos.x + 0.46, pos.y + 0.04, pos.z + 0.43 + coneLength / 2)
-  dynamicGroup.add(cone)
-
-  const coneTip = new THREE.Mesh(
-    new THREE.SphereGeometry(0.035, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending }),
-  )
-  coneTip.position.set(pos.x + 0.46, pos.y + 0.04, pos.z + 0.43)
-  dynamicGroup.add(coneTip)
-
-  for (const dx of [-0.26, 0.14]) {
-    const vent = new THREE.Mesh(
-      new THREE.BoxGeometry(0.18, 0.018, 0.035),
-      new THREE.MeshBasicMaterial({ color: 0x7ee8ff, transparent: true, opacity: 0.65 }),
-    )
-    vent.position.set(pos.x + dx, pos.y + 0.08, pos.z + 0.31)
-    dynamicGroup.add(vent)
-  }
-}
-
-function createMagnifierModel(pos: THREE.Vector3) {
-  // 默认 Torus / Circle 位于 x-y 平面，正好像一只面向镜头的放大镜。
-  // 这样手柄可以直接从圆环右下方接出去，不会再出现“柄和圈没连上”的问题。
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0x7ee8ff, transparent: true, opacity: 0.92 })
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.028, 18, 72), ringMat)
-  ring.position.copy(pos)
-  dynamicGroup.add(ring)
-
-  const glass = new THREE.Mesh(
-    new THREE.CircleGeometry(0.36, 64),
-    new THREE.MeshBasicMaterial({ color: 0x8feeff, transparent: true, opacity: 0.24, side: THREE.DoubleSide }),
-  )
-  glass.position.copy(pos)
-  dynamicGroup.add(glass)
-
-  const start = new THREE.Vector3(pos.x + 0.28, pos.y - 0.28, pos.z)
-  const end = new THREE.Vector3(pos.x + 0.92, pos.y - 0.92, pos.z)
-  addTube(dynamicGroup, start, end, 0.045, 0xffd166, 0.96)
-
-  const gripEnd = new THREE.Vector3(pos.x + 1.1, pos.y - 1.1, pos.z)
-  addTube(dynamicGroup, end, gripEnd, 0.064, 0x9b6a2f, 0.98)
-
-  const joint = new THREE.Mesh(new THREE.SphereGeometry(0.072, 20, 16), new THREE.MeshBasicMaterial({ color: 0xffd166 }))
-  joint.position.copy(start)
-  dynamicGroup.add(joint)
-
-  const shine = new THREE.Mesh(
-    new THREE.RingGeometry(0.2, 0.23, 36),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, side: THREE.DoubleSide }),
-  )
-  shine.position.set(pos.x - 0.07, pos.y + 0.07, pos.z + 0.002)
-  dynamicGroup.add(shine)
-}
-
-function createScreen(x: number, compressed = false) {
-  const screen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.06, 2.55, 1.45),
-    new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.23, roughness: 0.25, metalness: 0 }),
-  )
-  screen.position.set(x, 0.75, 0)
-  screenGroup.add(screen)
-  labelGroup.add(
-    makeTextSprite(compressed ? '光屏 / 承接实像\n位置已压缩显示' : '光屏 / 承接实像', '#ffffff', new THREE.Vector3(x, 2.55, 1.16), 0.72, 40),
-  )
-}
-
-function createScreenProjection(x: number, imageTopY: number, score: number) {
-  // 光屏寻像挑战：在光屏上显示“投影蜡烛”。
-  // score 越高越清晰；偏离真实像距时，用半透明光斑和低透明度蜡烛表示模糊。
-  const safeScore = clamp(score, 0, 100)
-  const opacity = 0.18 + (safeScore / 100) * 0.52
-  const blurOpacity = 0.2 + (1 - safeScore / 100) * 0.34
-  const clampedTopY = clamp(imageTopY, -2.05, 2.05)
-  const blurHeight = Math.max(0.62, Math.min(2.55, Math.abs(clampedTopY) + 0.62))
-
-  const blurPatch = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.045, blurHeight, 1, 1),
-    new THREE.MeshBasicMaterial({
-      color: safeScore >= 80 ? 0x7ee8ff : 0xffd166,
-      transparent: true,
-      opacity: blurOpacity,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-  )
-  blurPatch.rotation.y = Math.PI / 2
-  blurPatch.position.set(x - 0.045, clampedTopY * 0.48, 0.012)
-  screenGroup.add(blurPatch)
-
-  createCandleModel(screenGroup, {
-    x: x - 0.075,
-    topY: clampedTopY,
-    bodyColor: 0xfff1c2,
-    bodyAccentColor: safeScore >= 80 ? 0x34d9ff : 0xffd166,
-    flameColor: 0xff9f43,
-    glowColor: safeScore >= 80 ? 0x34d9ff : 0xffd166,
-    opacity,
-    radiusScale: 0.82,
-    withLight: false,
-    ghost: safeScore < 70,
-  })
-
-  const statusText = safeScore >= 92 ? '清晰成像' : safeScore >= 55 ? '略微模糊' : '明显模糊'
-  labelGroup.add(
-    makeTextSprite(
-      `${statusText}\n清晰度 ${Math.round(safeScore)}%`,
-      safeScore >= 80 ? '#7ee8ff' : '#ffd166',
-      new THREE.Vector3(x, 2.92, 0),
-      0.58,
-      34,
-    ),
-  )
+  return position
 }
 
 function clipTowardScene(start: THREE.Vector3, target: THREE.Vector3) {
@@ -2237,83 +2459,10 @@ function clipTowardScene(start: THREE.Vector3, target: THREE.Vector3) {
   return new THREE.Vector3(start.x + dx * t, start.y + dy * t, start.z + (target.z - start.z) * t)
 }
 
-function createRays(m: OpticalMetrics, objectX: number, objectY: number, imageX: number, imageY: number, virtualOutOfRange = false) {
-  const obj = new THREE.Vector3(objectX, objectY, 0)
-  const lensAtObjY = new THREE.Vector3(0, objectY, 0)
-  const center = new THREE.Vector3(0, 0, 0)
-
-  if (!Number.isFinite(m.v)) {
-    addRay(obj, lensAtObjY, 'yellow')
-    addRay(lensAtObjY, new THREE.Vector3(MAX_X, objectY, 0), 'yellow')
-
-    const slope = (0 - objectY) / (0 - objectX)
-    addRay(obj, new THREE.Vector3(MAX_X, slope * MAX_X, 0), 'cyan')
-    return
-  }
-
-  const img = new THREE.Vector3(imageX, imageY, 0)
-  const exitX = MAX_X
-
-  if (m.real) {
-    addRay(obj, lensAtObjY, 'yellow')
-    addRay(lensAtObjY, img, 'yellow')
-    addRay(obj, img, 'cyan')
-
-    const leftF = new THREE.Vector3(-cmToX(m.f), 0, 0)
-    const yAtLens = yOnLine(obj, leftF, 0)
-    const lensAtFocal = new THREE.Vector3(0, yAtLens, 0)
-    addRay(obj, lensAtFocal, 'green')
-    addRay(lensAtFocal, img, 'green')
-    return
-  }
-
-  const yParallelExit = yOnLine(lensAtObjY, img, exitX)
-  addRay(obj, lensAtObjY, 'yellow')
-  addRay(lensAtObjY, new THREE.Vector3(exitX, yParallelExit, 0), 'yellow')
-  if (!virtualOutOfRange) addDashedRay(lensAtObjY, img, 'red')
-
-  const yCenterExit = yOnLine(center, img, exitX)
-  addRay(obj, new THREE.Vector3(exitX, yCenterExit, 0), 'cyan')
-  if (!virtualOutOfRange) addDashedRay(center, img, 'red')
-
-  const leftF = new THREE.Vector3(-cmToX(m.f), 0, 0)
-  const yAtLens = yOnLine(obj, leftF, 0)
-  const lensAtFocal = new THREE.Vector3(0, yAtLens, 0)
-  const yFocalExit = yOnLine(lensAtFocal, img, exitX)
-  addRay(obj, lensAtFocal, 'green')
-  addRay(lensAtFocal, new THREE.Vector3(exitX, yFocalExit, 0), 'green')
-  if (!virtualOutOfRange) addDashedRay(lensAtFocal, img, 'red')
-}
-
 function yOnLine(a: THREE.Vector3, b: THREE.Vector3, x: number) {
-  return a.y + ((b.y - a.y) / (b.x - a.x)) * (x - a.x)
-}
-
-function addRay(start: THREE.Vector3, end: THREE.Vector3, style: RayStyle) {
-  const colorMap: Record<RayStyle, number> = {
-    yellow: 0xffd166,
-    cyan: 0x34d9ff,
-    green: 0x64f4ac,
-    red: 0xff6b7a,
-  }
-  const color = colorMap[style]
-  addTube(rayGroup, start, end, 0.015, color, 0.9)
-  addConeArrow(rayGroup, start, end, color)
-}
-
-function addDashedRay(start: THREE.Vector3, end: THREE.Vector3, style: RayStyle) {
-  const color = style === 'red' ? 0xff6b7a : 0xffffff
-  const points = [start, end]
-  const geo = new THREE.BufferGeometry().setFromPoints(points)
-  const mat = new THREE.LineDashedMaterial({ color, transparent: true, opacity: 0.72, dashSize: 0.12, gapSize: 0.08 })
-  const line = new THREE.Line(geo, mat)
-  line.computeLineDistances()
-  rayGroup.add(line)
-}
-
-function addArrow(group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3, color: number) {
-  addTube(group, start, end, 0.035, color, 0.95)
-  addConeArrow(group, start, end, color, 0.09, 0.2)
+  const dx = b.x - a.x
+  if (Math.abs(dx) < 0.000001) return a.y
+  return a.y + ((b.y - a.y) / dx) * (x - a.x)
 }
 
 function addTube(group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number, opacity = 1) {
@@ -2327,16 +2476,6 @@ function addTube(group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3, r
   mesh.position.copy(start).add(end).multiplyScalar(0.5)
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize())
   group.add(mesh)
-}
-
-function addConeArrow(group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3, color: number, radius = 0.055, height = 0.14) {
-  const dir = new THREE.Vector3().subVectors(end, start)
-  if (dir.lengthSq() < 0.0001) return
-  dir.normalize()
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 16), new THREE.MeshBasicMaterial({ color }))
-  cone.position.copy(end).addScaledVector(dir, -height * 0.45)
-  cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
-  group.add(cone)
 }
 
 function makeTextSprite(text: string, color: string, position: THREE.Vector3, size = 0.36, fontSize = 20) {
@@ -2381,14 +2520,51 @@ function setCameraView(view: CameraView) {
   controls.update()
 }
 
+function toggleLeftPanel() {
+  leftPanelOpen.value = !leftPanelOpen.value
+  schedulePanelLayoutResize()
+}
+
+function toggleRightPanel() {
+  rightPanelOpen.value = !rightPanelOpen.value
+  schedulePanelLayoutResize()
+}
+
+function scheduleRendererResize() {
+  if (rendererResizeFrame) return
+  rendererResizeFrame = requestAnimationFrame(() => {
+    rendererResizeFrame = 0
+    resizeRenderer()
+  })
+}
+
+function schedulePanelLayoutResize() {
+  nextTick(() => {
+    scheduleRendererResize()
+
+    panelResizeTimers.forEach(timer => window.clearTimeout(timer))
+    panelResizeTimers = [50, 140, 260].map(delay => window.setTimeout(scheduleRendererResize, delay))
+  })
+}
+
 function resizeRenderer() {
   if (!canvasWrapRef.value || !renderer || !camera) return
   const rect = canvasWrapRef.value.getBoundingClientRect()
-  const width = Math.max(1, rect.width)
-  const height = Math.max(1, rect.height)
+  const width = Math.max(1, Math.round(rect.width))
+  const height = Math.max(1, Math.round(rect.height))
+  const currentSize = renderer.getSize(new THREE.Vector2())
+
+  if (Math.abs(currentSize.x - width) < 1 && Math.abs(currentSize.y - height) < 1) {
+    return
+  }
+
   camera.aspect = width / height
   camera.updateProjectionMatrix()
   renderer.setSize(width, height, false)
+
+  // setSize 会重置 WebGL drawing buffer；立即补渲染一帧，避免点击收起/展开时出现短暂黑闪。
+  controls?.update()
+  renderer.render(scene, camera)
 }
 
 function animate(now: number) {
@@ -2404,13 +2580,27 @@ function animate(now: number) {
   frameId = requestAnimationFrame(animate)
 }
 
+function disposeMaterial(material?: THREE.Material | THREE.Material[]) {
+  if (!material) return
+
+  const disposeOne = (mat: THREE.Material) => {
+    const record = mat as THREE.Material & Record<string, unknown>
+    Object.keys(record).forEach(key => {
+      const value = record[key]
+      if (value instanceof THREE.Texture) value.dispose()
+    })
+    mat.dispose()
+  }
+
+  if (Array.isArray(material)) material.forEach(disposeOne)
+  else disposeOne(material)
+}
+
 function clearGroup(group: THREE.Group) {
   group.traverse(obj => {
     const mesh = obj as THREE.Mesh
     if (mesh.geometry) mesh.geometry.dispose()
-    const mat = mesh.material as THREE.Material | THREE.Material[] | undefined
-    if (Array.isArray(mat)) mat.forEach(m => m.dispose())
-    else mat?.dispose()
+    disposeMaterial(mesh.material as THREE.Material | THREE.Material[] | undefined)
   })
   group.clear()
 }
@@ -2423,7 +2613,7 @@ function scheduleDynamicSceneUpdate() {
   })
 }
 
-watch([metrics, showRays, showScreen, showLabels, focusChallenge, appMode, () => state.screenCm], () => {
+watch([metrics, showRays, showScreen, showLabels, showDimensions, focusChallenge, appMode, () => state.screenCm], () => {
   nextTick(scheduleDynamicSceneUpdate)
 })
 
@@ -2431,7 +2621,7 @@ watch(
   metrics,
   value => {
     if (!focusChallenge.value && value.real && Number.isFinite(value.v)) {
-      state.screenCm = clamp(value.v, -BENCH_LIMIT_CM, BENCH_LIMIT_CM)
+      state.screenCm = clamp(value.v, 0, BENCH_LIMIT_CM)
     }
   },
   { immediate: true },
@@ -2444,14 +2634,18 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (frameId) cancelAnimationFrame(frameId)
   if (dynamicUpdateFrame) cancelAnimationFrame(dynamicUpdateFrame)
-  window.removeEventListener('resize', resizeRenderer)
+  if (rendererResizeFrame) cancelAnimationFrame(rendererResizeFrame)
+  panelResizeTimers.forEach(timer => window.clearTimeout(timer))
+  panelResizeTimers = []
+  window.removeEventListener('resize', scheduleRendererResize)
   resizeObserver?.disconnect()
   controls?.dispose()
+  if (rootGroup) clearGroup(rootGroup)
   if (renderer) {
     renderer.dispose()
+    renderer.forceContextLoss()
     renderer.domElement?.parentElement?.removeChild(renderer.domElement)
   }
-  if (rootGroup) clearGroup(rootGroup)
 })
 </script>
 
@@ -2461,6 +2655,14 @@ onBeforeUnmount(() => {
 :global(#app) {
   margin: 0;
   min-height: 100%;
+}
+
+:global(html) {
+  scrollbar-gutter: stable;
+}
+
+:global(body) {
+  overflow-x: hidden;
 }
 
 .lens-page {
@@ -2488,6 +2690,7 @@ onBeforeUnmount(() => {
     radial-gradient(circle at 18% 12%, rgba(52, 217, 255, 0.17), transparent 30%),
     radial-gradient(circle at 84% 20%, rgba(255, 209, 102, 0.12), transparent 32%), linear-gradient(135deg, #06111f 0%, #0b1b2f 48%, #07101d 100%);
   overflow: hidden;
+  scrollbar-gutter: stable;
   position: relative;
   box-sizing: border-box;
 
@@ -2542,6 +2745,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 68px;
+  height: auto;
+  overflow: visible;
 }
 
 .brand {
@@ -2581,6 +2787,17 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   align-items: center;
   max-width: 760px;
+  min-width: 0;
+}
+
+.top-actions > button {
+  flex: 0 0 auto;
+}
+
+.mobile-panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 button {
@@ -2808,8 +3025,29 @@ button {
 .layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: 300px 1fr 330px;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr) minmax(0, 330px);
   gap: 12px;
+}
+
+.panel.collapsed {
+  min-width: 0;
+  padding: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lens-page.left-panel-collapsed:not(.right-panel-collapsed) .layout {
+  grid-template-columns: minmax(0, 0px) minmax(0, 1fr) minmax(0, 330px);
+}
+
+.lens-page.right-panel-collapsed:not(.left-panel-collapsed) .layout {
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr) minmax(0, 0px);
+}
+
+.lens-page.left-panel-collapsed.right-panel-collapsed .layout {
+  grid-template-columns: minmax(0, 0px) minmax(0, 1fr) minmax(0, 0px);
 }
 
 .panel {
@@ -2819,6 +3057,10 @@ button {
   padding: 14px;
   scrollbar-width: thin;
   scrollbar-color: rgba(126, 232, 255, 0.45) transparent;
+  transition:
+    opacity 0.14s ease,
+    padding 0.14s ease,
+    border-width 0.14s ease;
 }
 
 .panel-title {
@@ -2977,8 +3219,9 @@ button {
   overflow: hidden;
   padding: 12px;
   display: grid;
-  grid-template-rows: 1fr 118px;
-  gap: 10px;
+  /* 底部 4 个实时数据卡片压缩高度，把更多纵向空间留给 3D 画布 */
+  grid-template-rows: 1fr 76px;
+  gap: 8px;
 }
 
 .canvas-wrap {
@@ -3068,7 +3311,7 @@ button {
 .toast {
   position: absolute;
   right: 20px;
-  bottom: 138px;
+  bottom: 94px;
   z-index: 2;
   max-width: 400px;
   padding: 10px 12px;
@@ -3082,32 +3325,46 @@ button {
 }
 
 .metric-strip {
-  border-radius: 20px;
+  border-radius: 16px;
   border: 1px solid rgba(126, 232, 255, 0.15);
   background: rgba(5, 15, 27, 0.55);
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  padding: 10px;
+  align-items: stretch;
+  gap: 6px;
+  padding: 7px;
+  min-height: 0;
 }
 
 .metric-card {
-  border-radius: 14px;
-  padding: 10px;
+  min-height: 0;
+  border-radius: 12px;
+  padding: 7px 8px;
   background: rgba(13, 34, 58, 0.7);
   border: 1px solid rgba(126, 232, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 
   span {
     display: block;
-    font-size: 11px;
+    font-size: 10px;
+    line-height: 1.15;
     color: var(--muted);
-    margin-bottom: 5px;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   b {
-    font-size: 17px;
+    font-size: 15px;
+    line-height: 1.15;
     color: var(--cyan2);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   &.active b {
@@ -3591,13 +3848,21 @@ button:disabled {
 
 @media (max-width: 1200px) {
   .lens-page {
+    width: 100%;
     height: auto;
-    min-height: 100vh;
-    overflow: auto;
+    min-height: 100dvh;
+    grid-template-rows: auto 1fr;
+    // 小屏/中屏只让 body 负责滚动，避免 lens-page 内部滚动条 + 页面滚动条同时出现。
+    overflow: visible;
+    scrollbar-gutter: auto;
   }
 
   .layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
+  }
+
+  .panel.collapsed {
+    display: none;
   }
 
   .stage-card {
@@ -3606,6 +3871,89 @@ button:disabled {
 
   .metric-strip {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .lens-page {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .brand h1 {
+    font-size: 18px;
+    line-height: 1.18;
+  }
+
+  .top-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-content: stretch;
+    max-width: none;
+    width: 100%;
+    gap: 7px;
+  }
+
+  .top-actions > button {
+    width: 100%;
+    min-width: 0;
+    min-height: 30px;
+    padding: 6px 7px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .stage-card {
+    order: 1;
+    height: 660px;
+    grid-template-rows: 1fr 112px;
+  }
+
+  .left-panel {
+    order: 2;
+  }
+
+  .right-panel {
+    order: 3;
+  }
+
+  .metric-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .metric-card {
+    padding: 6px 7px;
+
+    span {
+      font-size: 9.5px;
+    }
+
+    b {
+      font-size: 13.5px;
+    }
+  }
+
+  .scene-title,
+  .legend-panel,
+  .toast {
+    transform: scale(0.9);
+    transform-origin: top left;
   }
 }
 </style>
