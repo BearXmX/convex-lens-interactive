@@ -1,5 +1,6 @@
 <template>
-  <section class="lens-page" :class="{ 'left-panel-collapsed': !leftPanelOpen, 'right-panel-collapsed': !rightPanelOpen }">
+  <section class="lens-page"
+    :class="{ 'left-panel-collapsed': !leftPanelOpen, 'right-panel-collapsed': !rightPanelOpen }">
     <div class="bg-grid"></div>
     <div class="scan-line"></div>
 
@@ -16,10 +17,12 @@
         <button class="ghost guide-top-btn" @click="showGuideDialog = true">使用引导</button>
         <button class="ghost mobile-panel-btn" @click="toggleLeftPanel">{{ leftPanelOpen ? '收起控制' : '展开控制' }}</button>
         <button class="ghost mobile-panel-btn" @click="toggleRightPanel">{{ rightPanelOpen ? '收起知识' : '展开知识' }}</button>
-        <button class="ghost" :class="{ active: cameraView === 'standard' }" @click="setCameraView('standard')">标准视角</button>
+        <button class="ghost" :class="{ active: cameraView === 'standard' }"
+          @click="setCameraView('standard')">标准视角</button>
         <button class="ghost" :class="{ active: cameraView === 'top' }" @click="setCameraView('top')">俯视光路</button>
         <button class="ghost top-snapshot-btn" @click="snapshotExperiment">快照当前实验</button>
-        <button class="ghost" :disabled="experimentLogs.length === 0" @click="exportExperimentLogsAsImage">导出日志图片</button>
+        <button class="ghost" :disabled="experimentLogs.length === 0"
+          @click="exportExperimentLogsAsImage">导出日志图片</button>
         <button class="ghost" :disabled="experimentLogs.length === 0" @click="clearExperimentLogs">清空日志</button>
         <button class="ghost" @click="resetExperiment">重置</button>
       </div>
@@ -108,9 +111,12 @@
 
         <div class="block">
           <h3>① 实验参数</h3>
-          <RangeRow label="物距 u" :value="state.u" suffix="cm" :min="6" :max="60" :step="0.1" @update:value="setManualValue('u', $event)" />
-          <RangeRow label="焦距 f" :value="state.f" suffix="cm" :min="6" :max="20" :step="0.1" @update:value="setManualValue('f', $event)" />
-          <RangeRow label="物高 H" :value="state.h" suffix="cm" :min="2" :max="8" :step="0.1" @update:value="setManualValue('h', $event)" />
+          <RangeRow label="物距 u" :value="state.u" suffix="cm" :min="6" :max="60" :step="0.1"
+            @update:value="setManualValue('u', $event)" />
+          <RangeRow label="焦距 f" :value="state.f" suffix="cm" :min="6" :max="20" :step="0.1"
+            @update:value="setManualValue('f', $event)" />
+          <RangeRow label="物高 H" :value="state.h" suffix="cm" :min="2" :max="8" :step="0.1"
+            @update:value="setManualValue('h', $event)" />
           <p class="tip">
             先调物距、焦距和物高，3D 光具座会实时改变光路、像距和成像性质。为避免像距过大超出光具座，接近焦点时系统会自动限制极端参数。
           </p>
@@ -160,16 +166,8 @@
             <button v-if="focusChallenge" class="wide ghost-btn" @click="snapScreenToImage">一键对焦到像距</button>
           </div>
 
-          <RangeRow
-            v-if="focusChallenge"
-            label="光屏位置"
-            :value="state.screenCm"
-            suffix="cm"
-            :min="0"
-            :max="120"
-            :step="0.1"
-            @update:value="setManualValue('screenCm', $event)"
-          />
+          <RangeRow v-if="focusChallenge" label="光屏位置" :value="state.screenCm" suffix="cm" :min="0" :max="120"
+            :step="0.1" @update:value="setManualValue('screenCm', $event)" />
           <p class="tip">光屏寻像只用于实像。若当前是虚像或 u=f，开启时会自动切回 f&lt;u&lt;2f，避免物理意义混乱。</p>
         </div>
 
@@ -186,16 +184,11 @@
           </div>
 
           <div v-if="challengeActive" class="choice-list">
-            <button
-              v-for="choice in challengeChoices"
-              :key="choice.key"
-              :class="{
-                active: selectedChallengeKey === choice.key,
-                correct: challengeResultVisible && choice.key === challengeExpectedKey,
-                wrong: challengeResultVisible && selectedChallengeKey === choice.key && selectedChallengeKey !== challengeExpectedKey,
-              }"
-              @click="selectChallengeChoice(choice.key)"
-            >
+            <button v-for="choice in challengeChoices" :key="choice.key" :class="{
+              active: selectedChallengeKey === choice.key,
+              correct: challengeResultVisible && choice.key === challengeExpectedKey,
+              wrong: challengeResultVisible && selectedChallengeKey === choice.key && selectedChallengeKey !== challengeExpectedKey,
+            }" @click="selectChallengeChoice(choice.key)">
               <b>{{ choice.title }}</b>
               <span>{{ choice.result }}</span>
             </button>
@@ -217,7 +210,9 @@
 
         <div class="scene-title">
           <b>{{ imageType.title }}</b>
-          <span>{{ appModeLabel }} · u={{ formatNumber(metrics.u) }}cm · f={{ formatNumber(metrics.f) }}cm · {{ imageType.nature }}</span>
+          <span>{{ appModeLabel }} · u={{ formatNumber(metrics.u) }}cm · f={{ formatNumber(metrics.f) }}cm · {{
+            imageType.nature }}</span>
+          <span class="scene-desc">{{ imageType.toast }}</span>
         </div>
 
         <div class="legend-panel">
@@ -228,22 +223,21 @@
           <div><i class="ray red"></i>虚像反向延长线</div>
         </div>
 
-        <div class="toast">{{ imageType.toast }}</div>
 
-        <div class="metric-strip">
-          <div class="metric-card">
+        <div class="metric-summary">
+          <div class="metric-item">
             <span>像距 v（带符号）</span>
             <b>{{ isFiniteNumber(metrics.v) ? `${formatNumber(metrics.v)} cm` : '∞' }}</b>
           </div>
-          <div class="metric-card">
+          <div class="metric-item">
             <span>放大率 |m|</span>
             <b>{{ isFiniteNumber(metrics.m) ? formatNumber(Math.abs(metrics.m), 2) : '∞' }}</b>
           </div>
-          <div class="metric-card active">
+          <div class="metric-item active">
             <span>成像性质</span>
             <b>{{ imageType.short }}</b>
           </div>
-          <div class="metric-card">
+          <div class="metric-item">
             <span>{{ focusChallenge ? '调焦清晰度' : '光屏判断' }}</span>
             <b>{{ focusChallenge ? focusStatusText : imageType.screen }}</b>
           </div>
@@ -269,7 +263,8 @@
               <span>物高 H</span><b>{{ formatNumber(metrics.h) }} cm</b>
             </div>
             <div>
-              <span>像高 h'</span><b>{{ isFiniteNumber(metrics.imageHeight) ? `${formatNumber(Math.abs(metrics.imageHeight))} cm` : '∞' }}</b>
+              <span>像高 h'</span><b>{{ isFiniteNumber(metrics.imageHeight) ?
+                `${formatNumber(Math.abs(metrics.imageHeight)) } cm` : '∞' }}</b>
             </div>
             <div>
               <span>放大率</span><b>{{ isFiniteNumber(metrics.m) ? formatNumber(Math.abs(metrics.m), 2) : '∞' }}</b>
@@ -289,7 +284,8 @@
                 <b>#{{ index + 1 }} {{ item.mode }}</b>
                 <span>{{ item.time }}</span>
               </div>
-              <p><b>参数：</b>u={{ formatNumber(item.u) }}cm，f={{ formatNumber(item.f) }}cm，H={{ formatNumber(item.h) }}cm，v={{ item.vText }}</p>
+              <p><b>参数：</b>u={{ formatNumber(item.u) }}cm，f={{ formatNumber(item.f) }}cm，H={{ formatNumber(item.h)
+                }}cm，v={{ item.vText }}</p>
               <p><b>现象：</b>{{ item.nature }}；{{ item.position }}</p>
               <p><b>光屏：</b>{{ item.screen }}</p>
               <p><b>结论：</b>{{ item.conclusion }}</p>
@@ -300,7 +296,8 @@
         <div class="knowledge-card rule-table-card">
           <h3>成像规律表 · 自动高亮</h3>
           <div class="rule-table">
-            <div v-for="row in ruleRows" :key="row.key" class="rule-row" :class="{ active: currentRuleKey === row.key }">
+            <div v-for="row in ruleRows" :key="row.key" class="rule-row"
+              :class="{ active: currentRuleKey === row.key }">
               <div class="rule-left">
                 <b>{{ row.title }}</b>
                 <span>{{ row.range }}</span>
@@ -320,7 +317,8 @@
           <div class="step-actions">
             <button class="ghost-btn" :disabled="lessonStepIndex === 0" @click="prevLessonStep">上一步</button>
             <button @click="applyCurrentLessonStep">应用本步</button>
-            <button class="ghost-btn" :disabled="lessonStepIndex === lessonSteps.length - 1" @click="nextLessonStep">下一步</button>
+            <button class="ghost-btn" :disabled="lessonStepIndex === lessonSteps.length - 1"
+              @click="nextLessonStep">下一步</button>
           </div>
         </div>
 
@@ -1985,16 +1983,16 @@ function createReusableDimensionSegments() {
   liveScene.objectDimEnd = createLiveLine(0xffd166, 0.82)
   liveScene.imageDimStart = createLiveLine(0x34d9ff, 0.82)
   liveScene.imageDimEnd = createLiveLine(0x34d9ff, 0.82)
-  ;[
-    liveScene.objectDim,
-    liveScene.imageDim,
-    liveScene.objectDimStart,
-    liveScene.objectDimEnd,
-    liveScene.imageDimStart,
-    liveScene.imageDimEnd,
-  ].forEach(line => {
-    if (line) dynamicGroup.add(line)
-  })
+    ;[
+      liveScene.objectDim,
+      liveScene.imageDim,
+      liveScene.objectDimStart,
+      liveScene.objectDimEnd,
+      liveScene.imageDimStart,
+      liveScene.imageDimEnd,
+    ].forEach(line => {
+      if (line) dynamicGroup.add(line)
+    })
 }
 
 function updateLiveDimensionSegments(m: OpticalMetrics, objectX: number, imageX: number, canShowImage: boolean) {
@@ -2100,19 +2098,19 @@ function createReusableLabels() {
     38,
   )
   liveScene.appLabel = makeTextSprite('应用模式', '#7ee8ff', new THREE.Vector3(), 0.58, 34)
-  ;[
-    liveScene.objectLabel,
-    liveScene.imageLabel,
-    liveScene.screenLabel,
-    liveScene.focusStatusLabel,
-    liveScene.objectDimLabel,
-    liveScene.imageDimLabel,
-    liveScene.infiniteTipLabel,
-    liveScene.outOfRangeTipLabel,
-    liveScene.appLabel,
-  ].forEach(label => {
-    if (label) labelGroup.add(label)
-  })
+    ;[
+      liveScene.objectLabel,
+      liveScene.imageLabel,
+      liveScene.screenLabel,
+      liveScene.focusStatusLabel,
+      liveScene.objectDimLabel,
+      liveScene.imageDimLabel,
+      liveScene.infiniteTipLabel,
+      liveScene.outOfRangeTipLabel,
+      liveScene.appLabel,
+    ].forEach(label => {
+      if (label) labelGroup.add(label)
+    })
 
   // 刻度文字也只创建一次，不跟着拖动重建。
   for (let cm = -120; cm <= 120; cm += 30) {
@@ -2654,11 +2652,14 @@ onBeforeUnmount(() => {
 :global(body),
 :global(#app) {
   margin: 0;
+  width: 100%;
   min-height: 100%;
+  background: #07111f;
 }
 
-:global(html) {
-  scrollbar-gutter: stable;
+:global(html),
+:global(body) {
+  max-width: 100%;
 }
 
 :global(body) {
@@ -2678,7 +2679,7 @@ onBeforeUnmount(() => {
   --green: #64f4ac;
   --red: #ff6b7a;
 
-  width: 100vw;
+  width: 100%;
   height: 100vh;
   padding: 16px;
   display: grid;
@@ -2690,7 +2691,6 @@ onBeforeUnmount(() => {
     radial-gradient(circle at 18% 12%, rgba(52, 217, 255, 0.17), transparent 30%),
     radial-gradient(circle at 84% 20%, rgba(255, 209, 102, 0.12), transparent 32%), linear-gradient(135deg, #06111f 0%, #0b1b2f 48%, #07101d 100%);
   overflow: hidden;
-  scrollbar-gutter: stable;
   position: relative;
   box-sizing: border-box;
 
@@ -2790,7 +2790,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.top-actions > button {
+.top-actions>button {
   flex: 0 0 auto;
 }
 
@@ -3218,14 +3218,12 @@ button {
   border-radius: 24px;
   overflow: hidden;
   padding: 12px;
-  display: grid;
-  /* 底部 4 个实时数据卡片压缩高度，把更多纵向空间留给 3D 画布 */
-  grid-template-rows: 1fr 76px;
-  gap: 8px;
 }
 
 .canvas-wrap {
   position: relative;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   border-radius: 20px;
   overflow: hidden;
@@ -3244,13 +3242,14 @@ button {
 .scene-title {
   position: absolute;
   left: 20px;
-  top: 84px;
-  z-index: 2;
+  top: 20px;
+  z-index: 3;
   display: grid;
   gap: 4px;
-  padding: 9px 11px;
+  max-width: 500px;
+  padding: 10px 12px;
   border-radius: 13px;
-  background: rgba(0, 0, 0, 0.34);
+  background: rgba(0, 0, 0, 0.38);
   border: 1px solid rgba(126, 232, 255, 0.18);
   pointer-events: none;
 
@@ -3262,6 +3261,14 @@ button {
   span {
     font-size: 11px;
     color: #c8e5f5;
+    line-height: 1.5;
+  }
+
+  .scene-desc {
+    margin-top: 3px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 209, 102, 0.16);
+    color: #fff3c7;
   }
 }
 
@@ -3297,70 +3304,68 @@ button {
   .yellow {
     background: var(--yellow);
   }
+
   .cyan {
     background: var(--cyan);
   }
+
   .green {
     background: var(--green);
   }
+
   .red {
     background: repeating-linear-gradient(90deg, var(--red) 0 6px, transparent 6px 10px);
   }
 }
 
-.toast {
+
+.metric-summary {
   position: absolute;
-  right: 20px;
-  bottom: 94px;
-  z-index: 2;
-  max-width: 400px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.38);
-  border: 1px solid rgba(255, 209, 102, 0.24);
-  color: #fff3c7;
-  font-size: 12px;
-  line-height: 1.55;
+  left: 20px;
+  bottom: 44px;
+  z-index: 3;
+  width: min(610px, calc(100% - 40px));
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  padding: 8px 10px;
+  border-radius: 15px;
+  border: 1px solid rgba(126, 232, 255, 0.2);
+  background: rgba(4, 13, 24, 0.78);
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.28),
+    inset 0 0 20px rgba(52, 217, 255, 0.04);
+  backdrop-filter: blur(10px);
   pointer-events: none;
 }
 
-.metric-strip {
-  border-radius: 16px;
-  border: 1px solid rgba(126, 232, 255, 0.15);
-  background: rgba(5, 15, 27, 0.55);
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  align-items: stretch;
-  gap: 6px;
-  padding: 7px;
-  min-height: 0;
-}
-
-.metric-card {
-  min-height: 0;
-  border-radius: 12px;
-  padding: 7px 8px;
-  background: rgba(13, 34, 58, 0.7);
-  border: 1px solid rgba(126, 232, 255, 0.12);
+.metric-item {
+  min-width: 0;
+  padding: 5px 12px;
   display: flex;
   flex-direction: column;
   justify-content: center;
 
+  &+& {
+    border-left: 1px solid rgba(126, 232, 255, 0.14);
+  }
+
   span {
     display: block;
-    font-size: 10px;
-    line-height: 1.15;
+    margin-bottom: 4px;
     color: var(--muted);
-    margin-bottom: 3px;
+    font-size: 10px;
+    line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   b {
-    font-size: 15px;
-    line-height: 1.15;
     color: var(--cyan2);
+    font-size: 15px;
+    line-height: 1.2;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
@@ -3869,8 +3874,8 @@ button:disabled {
     height: 760px;
   }
 
-  .metric-strip {
-    grid-template-columns: 1fr 1fr;
+  .metric-summary {
+    width: min(610px, calc(100% - 40px));
   }
 }
 
@@ -3906,7 +3911,7 @@ button:disabled {
     gap: 7px;
   }
 
-  .top-actions > button {
+  .top-actions>button {
     width: 100%;
     min-width: 0;
     min-height: 30px;
@@ -3922,7 +3927,6 @@ button:disabled {
   .stage-card {
     order: 1;
     height: 660px;
-    grid-template-rows: 1fr 112px;
   }
 
   .left-panel {
@@ -3933,12 +3937,25 @@ button:disabled {
     order: 3;
   }
 
-  .metric-strip {
+  .metric-summary {
+    left: 12px;
+    bottom: 30px;
+    width: calc(100% - 24px);
     grid-template-columns: 1fr 1fr;
+    padding: 7px 8px;
   }
 
-  .metric-card {
-    padding: 6px 7px;
+  .metric-item {
+    padding: 6px 8px;
+
+    &:nth-child(3) {
+      border-left: 0;
+      border-top: 1px solid rgba(126, 232, 255, 0.14);
+    }
+
+    &:nth-child(4) {
+      border-top: 1px solid rgba(126, 232, 255, 0.14);
+    }
 
     span {
       font-size: 9.5px;
@@ -3949,11 +3966,19 @@ button:disabled {
     }
   }
 
-  .scene-title,
-  .legend-panel,
-  .toast {
+  .scene-title {
+    left: 12px;
+    top: 12px;
+    max-width: calc(100% - 24px);
     transform: scale(0.9);
     transform-origin: top left;
+  }
+
+  .legend-panel {
+    right: 12px;
+    top: 88px;
+    transform: scale(0.9);
+    transform-origin: top right;
   }
 }
 </style>
