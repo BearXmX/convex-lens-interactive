@@ -125,12 +125,12 @@
         <div class="block">
           <h3>② 典型位置</h3>
           <div class="preset-grid">
-            <button :class="{ active: presetKey === 'far' }" @click="setPreset('far')">u &gt; 2f</button>
-            <button :class="{ active: presetKey === 'twof' }" @click="setPreset('twof')">u = 2f</button>
-            <button :class="{ active: presetKey === 'between' }" @click="setPreset('between')">f &lt; u &lt; 2f</button>
-            <button :class="{ active: presetKey === 'focus' }" @click="setPreset('focus')">u = f</button>
-            <button :class="{ active: presetKey === 'inside' }" @click="setPreset('inside')">u &lt; f</button>
-            <button :class="{ active: presetKey === 'near' }" @click="setPreset('near')">靠近焦点</button>
+            <button :class="{ active: presetKey === 'far' }" @click="setTypicalPosition('far')">u &gt; 2f</button>
+            <button :class="{ active: presetKey === 'twof' }" @click="setTypicalPosition('twof')">u = 2f</button>
+            <button :class="{ active: presetKey === 'between' }" @click="setTypicalPosition('between')">f &lt; u &lt; 2f</button>
+            <button :class="{ active: presetKey === 'focus' }" @click="setTypicalPosition('focus')">u = f</button>
+            <button :class="{ active: presetKey === 'inside' }" @click="setTypicalPosition('inside')">u &lt; f</button>
+            <button :class="{ active: presetKey === 'near' }" @click="setTypicalPosition('near')">靠近焦点</button>
           </div>
           <p class="tip">建议课堂上按顺序点击：缩小实像 → 等大实像 → 放大实像 → 不成有限像 → 放大虚像。</p>
         </div>
@@ -492,6 +492,22 @@ const MAX_ABS_IMAGE_DISTANCE_CM = BENCH_LIMIT_CM
 // 配合 ±120cm 光具座，限制可视高度，避免像高过大导致进场看不清。
 const MAX_DISPLAY_IMAGE_Y = 9.2
 const EPS = 0.05
+
+// 镜头适配策略：不再依靠极端增大 FOV 来“塞下”场景，而是保持教材演示更稳定的 40° 透视，
+// 根据主场景真实宽高比自动把相机沿原观察方向后移。系统显示缩放到 125% / 150% 后，
+// 主场景在系统缩放 / 浏览器缩放后会得到更小的 CSS 可视区域。
+// 这次不再只依赖 FOV 或相机后退，而是让整个 Three.js 光具座随主场景宽度等比缩放，
+// 同时让相机目标点跟着缩放后的模型中心移动，避免 150% 缩放时模型视觉中心跑向右下角。
+const CAMERA_BASE_FOV = 40
+const CAMERA_REFERENCE_ASPECT = 1.45
+const STANDARD_CAMERA_TARGET = new THREE.Vector3(0, 0.72, 0)
+const STANDARD_CAMERA_OFFSET = new THREE.Vector3(4.8, 2.98, 9.2)
+const TOP_CAMERA_TARGET = new THREE.Vector3(0, 0.12, 0)
+const TOP_CAMERA_OFFSET = new THREE.Vector3(0, 10.08, 0.04)
+const CAMERA_MAX_DISTANCE_SCALE = 1.48
+const SCENE_FULL_SCALE_WIDTH = 1040
+const SCENE_MIN_SCALE_WIDTH = 620
+const SCENE_MIN_SCALE = 0.7
 
 const canvasWrapRef = ref<HTMLDivElement | null>(null)
 const playing = ref(false)
@@ -1352,6 +1368,18 @@ function setPreset(key: PresetKey) {
   playing.value = false
 }
 
+function setTypicalPosition(key: Exclude<PresetKey, ''>) {
+  const appModeByPreset: Partial<Record<Exclude<PresetKey, ''>, AppMode>> = {
+    far: 'camera',
+    between: 'projector',
+    near: 'projector',
+    inside: 'magnifier',
+  }
+
+  setPreset(key)
+  appMode.value = appModeByPreset[key] ?? 'bench'
+}
+
 function setAppMode(mode: AppMode) {
   appMode.value = mode
   focusChallenge.value = false
@@ -1432,13 +1460,21 @@ function initThree() {
   const width = Math.max(1, rect.width)
   const height = Math.max(1, rect.height)
 
-  camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 90)
-  // 初始镜头再拉近：默认进来直接看清蜡烛、透镜、光屏和成像，不再像远景总览。
-  camera.position.set(4.8, 3.7, 9.2)
+  const initialAspect = width / height
+  camera = new THREE.PerspectiveCamera(CAMERA_BASE_FOV, initialAspect, 0.1, 90)
+  // 初始坐标只作为观察方向基准；真正距离会由 applyResponsiveCamera() 按主场景宽高比自动计算。
+  camera.position.copy(STANDARD_CAMERA_TARGET).add(STANDARD_CAMERA_OFFSET)
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.55))
   renderer.setSize(width, height, false)
+  // WebGLRenderer 的 canvas 是运行时插入的，不会带上 Vue scoped style 的 data-v 属性。
+  // 必须显式固定它的 CSS 尺寸，否则 DPR=1.5 时 canvas 会按 1.5 倍绘图缓冲尺寸参与布局，
+  // 再被容器从左上角裁剪，场景中心看起来就会整体偏向右下。
+  renderer.domElement.classList.add('three-canvas')
+  renderer.domElement.style.display = 'block'
+  renderer.domElement.style.width = '100%'
+  renderer.domElement.style.height = '100%'
   renderer.setClearColor(0x07111f, 0)
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -1447,9 +1483,10 @@ function initThree() {
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.05
-  controls.target.set(0, 0.55, 0)
+  controls.target.copy(STANDARD_CAMERA_TARGET)
   controls.minDistance = 2.2
-  controls.maxDistance = 24
+  // 窄主场景下相机会适度后退；放宽最大距离，避免 OrbitControls.update() 把响应式相机重新夹回近处。
+  controls.maxDistance = 42
   controls.enablePan = false
   controls.addEventListener('start', () => {
     isUserOrbiting = true
@@ -1482,11 +1519,13 @@ function initThree() {
 
   createStaticScene()
   updateDynamicScene()
+  applyResponsiveSceneScale()
   setCameraView('standard')
 
   resizeObserver = new ResizeObserver(scheduleRendererResize)
   resizeObserver.observe(canvasWrapRef.value)
   window.addEventListener('resize', scheduleRendererResize, { passive: true })
+  window.visualViewport?.addEventListener('resize', scheduleRendererResize, { passive: true })
 
   lastTime = performance.now()
   animate(lastTime)
@@ -1932,6 +1971,10 @@ function updateLiveFocusMarkers(f: number) {
   const xs = [-cmToX(f), cmToX(f), -cmToX(2 * f), cmToX(2 * f)]
   liveScene.focusMarks.forEach((mark, index) => {
     const x = xs[index]
+    if (x === undefined) {
+      mark.visible = false
+      return
+    }
     mark.position.set(x, 0, 0)
     mark.visible = showLabels.value && x >= MIN_X && x <= MAX_X
   })
@@ -2503,19 +2546,74 @@ function makeTextSprite(text: string, color: string, position: THREE.Vector3, si
   return sprite
 }
 
+function getResponsiveSceneScale(width: number) {
+  if (width >= SCENE_FULL_SCALE_WIDTH) return 1
+  if (width <= SCENE_MIN_SCALE_WIDTH) return SCENE_MIN_SCALE
+
+  const t = (width - SCENE_MIN_SCALE_WIDTH) / (SCENE_FULL_SCALE_WIDTH - SCENE_MIN_SCALE_WIDTH)
+  return THREE.MathUtils.lerp(SCENE_MIN_SCALE, 1, clamp(t, 0, 1))
+}
+
+function applyResponsiveSceneScale() {
+  if (!rootGroup || !canvasWrapRef.value) return 1
+
+  const rect = canvasWrapRef.value.getBoundingClientRect()
+  const scale = getResponsiveSceneScale(rect.width)
+  rootGroup.scale.setScalar(scale)
+  rootGroup.position.set(0, 0, 0)
+  rootGroup.updateMatrixWorld(true)
+  return scale
+}
+
+function getCameraDistanceScale(aspect: number) {
+  const safeAspect = Math.max(0.58, aspect || CAMERA_REFERENCE_ASPECT)
+  if (safeAspect >= CAMERA_REFERENCE_ASPECT) return 1
+
+  // 精确按水平视场宽度做补偿，而不是上一版只补 66%。
+  // tan(hFov/2)=tan(vFov/2)*aspect，所以维持相同水平构图时距离近似按 refAspect/aspect 增长。
+  return clamp(CAMERA_REFERENCE_ASPECT / safeAspect, 1, CAMERA_MAX_DISTANCE_SCALE)
+}
+
+function applyResponsiveCamera(view: CameraView = cameraView.value) {
+  if (!camera || !controls || !canvasWrapRef.value) return
+
+  const rect = canvasWrapRef.value.getBoundingClientRect()
+  const aspect = Math.max(0.58, rect.width / Math.max(1, rect.height))
+  const sceneScale = applyResponsiveSceneScale()
+  const distanceScale = getCameraDistanceScale(aspect)
+
+  camera.fov = CAMERA_BASE_FOV
+  camera.aspect = aspect
+
+  if (view === 'top') {
+    const target = TOP_CAMERA_TARGET.clone().multiplyScalar(sceneScale)
+    const topScale = 1 + (distanceScale - 1) * 0.72
+    camera.position.copy(target).add(TOP_CAMERA_OFFSET.clone().multiplyScalar(topScale))
+    controls.target.copy(target)
+  } else {
+    // 目标点必须同步跟随 rootGroup 的缩放。
+    // 如果模型缩小了但 target 仍停在 y=0.72，模型就会在屏幕里向下偏，这正是高缩放比例下“跑到右下角”的来源之一。
+    const target = STANDARD_CAMERA_TARGET.clone().multiplyScalar(sceneScale)
+
+    // 主场景越窄，稍微降低斜视角的横向分量，让长条光具座不再因为透视而挤向右下。
+    const narrow = clamp((SCENE_FULL_SCALE_WIDTH - rect.width) / (SCENE_FULL_SCALE_WIDTH - SCENE_MIN_SCALE_WIDTH), 0, 1)
+    const adaptiveOffset = STANDARD_CAMERA_OFFSET.clone()
+    adaptiveOffset.x = THREE.MathUtils.lerp(STANDARD_CAMERA_OFFSET.x, 2.2, narrow)
+    adaptiveOffset.y = THREE.MathUtils.lerp(STANDARD_CAMERA_OFFSET.y, 3.35, narrow)
+    adaptiveOffset.z = THREE.MathUtils.lerp(STANDARD_CAMERA_OFFSET.z, 10.5, narrow)
+
+    camera.position.copy(target).add(adaptiveOffset.multiplyScalar(distanceScale))
+    controls.target.copy(target)
+  }
+
+  camera.updateProjectionMatrix()
+  controls.update()
+}
+
 function setCameraView(view: CameraView) {
   cameraView.value = view
   if (!camera || !controls) return
-  if (view === 'top') {
-    // 俯视也拉近，重点看光路关系，不再从很高处看整个光具座。
-    camera.position.set(0, 10.2, 0.04)
-    controls.target.set(0, 0.12, 0)
-  } else {
-    // 标准视角进一步拉近，主体占画面更大。
-    camera.position.set(4.8, 3.7, 9.2)
-    controls.target.set(0, 0.72, 0)
-  }
-  controls.update()
+  applyResponsiveCamera(view)
 }
 
 function toggleLeftPanel() {
@@ -2550,17 +2648,25 @@ function resizeRenderer() {
   const rect = canvasWrapRef.value.getBoundingClientRect()
   const width = Math.max(1, Math.round(rect.width))
   const height = Math.max(1, Math.round(rect.height))
+  const aspect = width / height
   const currentSize = renderer.getSize(new THREE.Vector2())
+  const nextPixelRatio = Math.min(window.devicePixelRatio || 1, 1.55)
 
-  if (Math.abs(currentSize.x - width) < 1 && Math.abs(currentSize.y - height) < 1) {
-    return
+  const sizeChanged = Math.abs(currentSize.x - width) >= 1 || Math.abs(currentSize.y - height) >= 1
+  const aspectChanged = Math.abs(camera.aspect - aspect) > 0.0005
+  const pixelRatioChanged = Math.abs(renderer.getPixelRatio() - nextPixelRatio) > 0.01
+
+  if (pixelRatioChanged) renderer.setPixelRatio(nextPixelRatio)
+  if (sizeChanged || pixelRatioChanged) renderer.setSize(width, height, false)
+
+  if (sizeChanged || aspectChanged || pixelRatioChanged) {
+    // 系统缩放改变时，除了 renderer 尺寸，还必须同步模型 scale、目标点和观察方向。
+    applyResponsiveCamera(cameraView.value)
+  } else {
+    camera.aspect = aspect
+    camera.updateProjectionMatrix()
   }
 
-  camera.aspect = width / height
-  camera.updateProjectionMatrix()
-  renderer.setSize(width, height, false)
-
-  // setSize 会重置 WebGL drawing buffer；立即补渲染一帧，避免点击收起/展开时出现短暂黑闪。
   controls?.update()
   renderer.render(scene, camera)
 }
@@ -2636,6 +2742,7 @@ onBeforeUnmount(() => {
   panelResizeTimers.forEach(timer => window.clearTimeout(timer))
   panelResizeTimers = []
   window.removeEventListener('resize', scheduleRendererResize)
+  window.visualViewport?.removeEventListener('resize', scheduleRendererResize)
   resizeObserver?.disconnect()
   controls?.dispose()
   if (rootGroup) clearGroup(rootGroup)
@@ -2683,7 +2790,9 @@ onBeforeUnmount(() => {
   height: 100vh;
   padding: 16px;
   display: grid;
-  grid-template-rows: 68px 1fr;
+  // 顶部按钮在 125% / 150% 缩放时可能换行，不能再把首行固定死为 68px，
+  // 否则 topbar 会覆盖主场景，造成可视区域判断和实际画面不一致。
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   color: var(--text);
   font-family: 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif;
@@ -3025,7 +3134,9 @@ button {
 .layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 300px) minmax(0, 1fr) minmax(0, 330px);
+  // 不再把左右栏永久锁死为 300 / 330px。系统缩放 150% 时 CSS 视口会明显变窄，
+  // 让两侧栏先适度收缩，把更多宽度留给 Three.js 主场景。
+  grid-template-columns: clamp(220px, 16vw, 300px) minmax(0, 1fr) clamp(250px, 18vw, 330px);
   gap: 12px;
 }
 
@@ -3039,11 +3150,11 @@ button {
 }
 
 .lens-page.left-panel-collapsed:not(.right-panel-collapsed) .layout {
-  grid-template-columns: minmax(0, 0px) minmax(0, 1fr) minmax(0, 330px);
+  grid-template-columns: minmax(0, 0px) minmax(0, 1fr) clamp(250px, 18vw, 330px);
 }
 
 .lens-page.right-panel-collapsed:not(.left-panel-collapsed) .layout {
-  grid-template-columns: minmax(0, 300px) minmax(0, 1fr) minmax(0, 0px);
+  grid-template-columns: clamp(220px, 16vw, 300px) minmax(0, 1fr) minmax(0, 0px);
 }
 
 .lens-page.left-panel-collapsed.right-panel-collapsed .layout {
@@ -3232,7 +3343,8 @@ button {
     radial-gradient(circle at 50% 38%, rgba(52, 217, 255, 0.12), transparent 38%),
     linear-gradient(180deg, rgba(6, 17, 31, 0.86), rgba(4, 10, 18, 0.96));
 
-  canvas {
+  // canvas 由 Three.js 动态创建，需要 :deep() 穿透 scoped 样式。
+  :deep(.three-canvas) {
     display: block;
     width: 100%;
     height: 100%;
@@ -3246,7 +3358,7 @@ button {
   z-index: 3;
   display: grid;
   gap: 4px;
-  max-width: 500px;
+  max-width: min(500px, calc(100% - 180px));
   padding: 10px 12px;
   border-radius: 13px;
   background: rgba(0, 0, 0, 0.38);
@@ -3851,7 +3963,42 @@ button:disabled {
   line-height: 1.6;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1450px) and (min-width: 901px) {
+  .lens-page {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .layout {
+    grid-template-columns: clamp(190px, 16vw, 235px) minmax(0, 1fr) clamp(215px, 18vw, 260px);
+    gap: 10px;
+  }
+
+  .lens-page.left-panel-collapsed:not(.right-panel-collapsed) .layout {
+    grid-template-columns: minmax(0, 0px) minmax(0, 1fr) clamp(215px, 18vw, 260px);
+  }
+
+  .lens-page.right-panel-collapsed:not(.left-panel-collapsed) .layout {
+    grid-template-columns: clamp(190px, 16vw, 235px) minmax(0, 1fr) minmax(0, 0px);
+  }
+
+  .brand h1 {
+    font-size: 18px;
+  }
+
+  .top-actions {
+    gap: 6px;
+    max-width: 700px;
+  }
+
+  .top-actions>button {
+    min-height: 30px;
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 900px) {
   .lens-page {
     width: 100%;
     height: auto;
