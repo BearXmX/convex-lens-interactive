@@ -117,6 +117,13 @@
             @update:value="setManualValue('f', $event)" />
           <RangeRow label="物高 H" :value="state.h" suffix="cm" :min="2" :max="8" :step="0.1"
             @update:value="setManualValue('h', $event)" />
+          <div class="object-switch">
+            <span>观察物体</span>
+            <div>
+              <button :class="{ active: objectKind === 'candle' }" @click="setObjectKind('candle')">蜡烛</button>
+              <button :class="{ active: objectKind === 'letterF' }" @click="setObjectKind('letterF')">红色字母 F 屏</button>
+            </div>
+          </div>
           <p class="tip">
             先调物距、焦距和物高，3D 光具座会实时改变光路、像距和成像性质。为避免像距过大超出光具座，接近焦点时系统会自动限制极端参数。
           </p>
@@ -448,6 +455,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 type PresetKey = 'far' | 'twof' | 'between' | 'focus' | 'inside' | 'near' | ''
 type CameraView = 'standard' | 'top'
 type AppMode = 'bench' | 'camera' | 'projector' | 'magnifier'
+type ObjectKind = 'candle' | 'letterF'
 type RuleKey = 'far' | 'twof' | 'between' | 'focus' | 'inside'
 
 type ExperimentLog = {
@@ -492,6 +500,10 @@ const MAX_ABS_IMAGE_DISTANCE_CM = BENCH_LIMIT_CM
 // 配合 ±120cm 光具座，限制可视高度，避免像高过大导致进场看不清。
 const MAX_DISPLAY_IMAGE_Y = 9.2
 const EPS = 0.05
+const SCREEN_WIDTH = 1.45
+const SCREEN_HEIGHT = 2.55
+// The ruler zero is the principal axis, so the screen should extend equally above and below it.
+const SCREEN_CENTER_Y = AXIS_Y
 
 // 镜头适配策略：不再依靠极端增大 FOV 来“塞下”场景，而是保持教材演示更稳定的 40° 透视，
 // 根据主场景真实宽高比自动把相机沿原观察方向后移。系统显示缩放到 125% / 150% 后，
@@ -517,6 +529,7 @@ const showLabels = ref(true)
 const showDimensions = ref(true)
 const focusChallenge = ref(false)
 const appMode = ref<AppMode>('bench')
+const objectKind = ref<ObjectKind>('candle')
 const presetKey = ref<PresetKey>('between')
 const cameraView = ref<CameraView>('standard')
 const showGuideDialog = ref(false)
@@ -551,6 +564,8 @@ let dynamicUpdateFrame = 0
 let rendererResizeFrame = 0
 let panelResizeTimers: number[] = []
 let isUserOrbiting = false
+let interactionQualityTimer = 0
+let sceneNeedsRender = true
 
 let rootGroup: THREE.Group
 let staticGroup: THREE.Group
@@ -581,6 +596,8 @@ const liveScene = {
   inited: false,
   objectCandle: null as THREE.Group | null,
   imageCandle: null as THREE.Group | null,
+  objectLetterF: null as THREE.Group | null,
+  imageLetterF: null as THREE.Group | null,
   screen: null as THREE.Group | null,
   imagePatch: null as THREE.Mesh | null,
   screenBlurPatch: null as THREE.Mesh | null,
@@ -595,6 +612,8 @@ const liveScene = {
   imageDimEnd: null as THREE.Line | null,
   objectLabel: null as THREE.Sprite | null,
   imageLabel: null as THREE.Sprite | null,
+  objectHeightLabel: null as THREE.Sprite | null,
+  imageHeightLabel: null as THREE.Sprite | null,
   screenLabel: null as THREE.Sprite | null,
   focusStatusLabel: null as THREE.Sprite | null,
   objectDimLabel: null as THREE.Sprite | null,
@@ -1432,6 +1451,11 @@ function toggleLayer(layer: 'rays' | 'screen' | 'labels' | 'dimensions') {
   scheduleDynamicSceneUpdate()
 }
 
+function setObjectKind(kind: ObjectKind) {
+  objectKind.value = kind
+  scheduleDynamicSceneUpdate()
+}
+
 function resetExperiment() {
   // 重置后也回到 f < u < 2f，而不是 u > 2f。
   state.u = 14.5
@@ -1439,6 +1463,7 @@ function resetExperiment() {
   state.h = 4
   presetKey.value = 'between'
   appMode.value = 'bench'
+  objectKind.value = 'candle'
   focusChallenge.value = false
   challengeActive.value = false
   selectedChallengeKey.value = ''
@@ -1465,8 +1490,8 @@ function initThree() {
   // 初始坐标只作为观察方向基准；真正距离会由 applyResponsiveCamera() 按主场景宽高比自动计算。
   camera.position.copy(STANDARD_CAMERA_TARGET).add(STANDARD_CAMERA_OFFSET)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.55))
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' })
+  renderer.setPixelRatio(getTargetRendererPixelRatio())
   renderer.setSize(width, height, false)
   // WebGLRenderer 的 canvas 是运行时插入的，不会带上 Vue scoped style 的 data-v 属性。
   // 必须显式固定它的 CSS 尺寸，否则 DPR=1.5 时 canvas 会按 1.5 倍绘图缓冲尺寸参与布局，
@@ -1478,21 +1503,36 @@ function initThree() {
   renderer.setClearColor(0x07111f, 0)
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  // Orbiting only moves the camera; shadow maps depend on lights and objects, so reuse them until scene data changes.
+  renderer.shadowMap.autoUpdate = false
+  renderer.shadowMap.needsUpdate = true
   canvasWrapRef.value.appendChild(renderer.domElement)
 
   controls = new OrbitControls(camera, renderer.domElement)
+  // Keep a small amount of smoothing without the pronounced lag of the previous 0.05 setting.
   controls.enableDamping = true
-  controls.dampingFactor = 0.05
+  controls.dampingFactor = 0.14
+  controls.rotateSpeed = 0.9
   controls.target.copy(STANDARD_CAMERA_TARGET)
   controls.minDistance = 2.2
   // 窄主场景下相机会适度后退；放宽最大距离，避免 OrbitControls.update() 把响应式相机重新夹回近处。
   controls.maxDistance = 42
   controls.enablePan = false
+  controls.addEventListener('change', () => {
+    sceneNeedsRender = true
+  })
   controls.addEventListener('start', () => {
     isUserOrbiting = true
+    if (interactionQualityTimer) window.clearTimeout(interactionQualityTimer)
+    syncRendererPixelRatio()
   })
   controls.addEventListener('end', () => {
     isUserOrbiting = false
+    if (interactionQualityTimer) window.clearTimeout(interactionQualityTimer)
+    interactionQualityTimer = window.setTimeout(() => {
+      interactionQualityTimer = 0
+      if (!isUserOrbiting) syncRendererPixelRatio()
+    }, 180)
   })
 
   const ambient = new THREE.AmbientLight(0xffffff, 1.35)
@@ -1541,9 +1581,10 @@ function createStaticScene() {
       roughness: 0.72,
       metalness: 0.18,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.24,
+      depthWrite: false,
       emissive: 0x041927,
-      emissiveIntensity: 0.32,
+      emissiveIntensity: 0.18,
     }),
   )
   floor.rotation.x = -Math.PI / 2
@@ -1634,6 +1675,8 @@ function updateDynamicScene() {
   // 拖动物距 / 焦距 / 物高时不再 clearGroup + 重建。
   // 这里只创建一次可复用对象，后续只更新 position / scale / BufferGeometry 坐标。
   updateLiveOpticsScene()
+  if (renderer?.shadowMap) renderer.shadowMap.needsUpdate = true
+  sceneNeedsRender = true
 }
 
 function updateLiveOpticsScene() {
@@ -1652,8 +1695,12 @@ function updateLiveOpticsScene() {
   const canShowImage = Number.isFinite(m.v) && !imageOutOfRange && !virtualOutOfRange
 
   updateLiveFocusMarkers(m.f)
-  updateLiveCandle(liveScene.objectCandle, objectX, objectTopY, true, 1)
-  updateLiveCandle(liveScene.imageCandle, imageX, imageTopY, canShowImage, m.real ? 0.78 : 0.48)
+  const showCandle = objectKind.value === 'candle'
+  const showLetterF = objectKind.value === 'letterF'
+  updateLiveCandle(liveScene.objectCandle, objectX, objectTopY, showCandle, 1)
+  updateLiveCandle(liveScene.imageCandle, imageX, imageTopY, showCandle && canShowImage, m.real ? 0.78 : 0.48)
+  updateLiveLetterF(liveScene.objectLetterF, objectX, objectTopY, showLetterF, 1)
+  updateLiveLetterF(liveScene.imageLetterF, imageX, imageTopY, showLetterF && canShowImage, m.real ? 0.8 : 0.5)
   updateLiveImagePatch(imageX, imageTopY, canShowImage, m.real)
   updateLiveScreen(m, imageTopY)
   updateLiveDimensionSegments(m, objectX, imageX, canShowImage)
@@ -1687,6 +1734,10 @@ function ensureLiveOpticsScene() {
     ghost: true,
   })
   dynamicGroup.add(liveScene.imageCandle)
+
+  liveScene.objectLetterF = createReusableLetterF({ accentColor: 0xff5a68, opacity: 1 })
+  liveScene.imageLetterF = createReusableLetterF({ accentColor: 0x34d9ff, opacity: 0.8, ghost: true, projection: true })
+  dynamicGroup.add(liveScene.objectLetterF, liveScene.imageLetterF)
 
   liveScene.imagePatch = new THREE.Mesh(
     new THREE.PlaneGeometry(0.52, 1),
@@ -1827,6 +1878,149 @@ function createReusableCandle(options: LiveCandleOptions) {
   return group
 }
 
+function createLetterFTexture(transparentBackground = false) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 512
+  canvas.height = 720
+  const ctx = canvas.getContext('2d')!
+
+  if (!transparentBackground) {
+    const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height)
+    background.addColorStop(0, '#111c28')
+    background.addColorStop(0.55, '#05080d')
+    background.addColorStop(1, '#121925')
+    ctx.fillStyle = background
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    ctx.strokeStyle = 'rgba(126,232,255,0.08)'
+    ctx.lineWidth = 1
+    for (let y = 18; y < canvas.height; y += 18) {
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(canvas.width, y)
+      ctx.stroke()
+    }
+  }
+
+  // Draw the glyph geometrically instead of relying on a local font, so its shape is stable on every device.
+  // Projection glyphs span the full canvas height so their visible height matches h' on the centimeter ruler.
+  const glyphTop = transparentBackground ? 0 : 40
+  const glyphHeight = transparentBackground ? canvas.height : 640
+  const topBarHeight = transparentBackground ? 92 : 86
+  const middleBarY = glyphTop + glyphHeight * 0.4
+  const glyphPath = new Path2D()
+  glyphPath.rect(126, glyphTop, 82, glyphHeight)
+  glyphPath.rect(126, glyphTop, 278, topBarHeight)
+  glyphPath.rect(126, middleBarY, 224, 82)
+  ctx.save()
+  ctx.shadowColor = 'rgba(255,35,55,0.95)'
+  ctx.shadowBlur = 34
+  ctx.fillStyle = '#ff2038'
+  ctx.fill(glyphPath)
+  ctx.restore()
+  ctx.fillStyle = '#ff4053'
+  ctx.fill(glyphPath)
+
+  if (!transparentBackground) {
+    ctx.strokeStyle = 'rgba(255,105,120,0.82)'
+    ctx.lineWidth = 8
+    ctx.strokeRect(13, 13, canvas.width - 26, canvas.height - 26)
+    ctx.fillStyle = '#ff3349'
+    ctx.beginPath()
+    ctx.arc(canvas.width - 34, 35, 7, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.minFilter = THREE.LinearFilter
+  texture.magFilter = THREE.LinearFilter
+  return texture
+}
+
+function createReusableLetterF(options: { accentColor: number; opacity: number; ghost?: boolean; projection?: boolean }) {
+  const group = new THREE.Group()
+  group.userData.opacity = options.opacity
+
+  const displayMat = new THREE.MeshBasicMaterial({
+    map: createLetterFTexture(Boolean(options.projection)),
+    color: options.ghost ? 0xbcefff : 0xffffff,
+    transparent: true,
+    opacity: options.opacity,
+    depthWrite: false,
+    // Projection mode has one outward-facing plane on each screen face; rendering their backs would show two F images at once.
+    side: options.projection ? THREE.FrontSide : THREE.DoubleSide,
+  })
+  const accentMat = new THREE.MeshBasicMaterial({
+    color: options.accentColor,
+    transparent: true,
+    opacity: Math.min(1, options.opacity + 0.12),
+  })
+  const opacityMaterials: THREE.Material[] = [displayMat, accentMat]
+
+  if (!options.projection) {
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: options.ghost ? 0x123346 : 0x202a36,
+      roughness: 0.34,
+      metalness: 0.52,
+      emissive: options.accentColor,
+      emissiveIntensity: options.ghost ? 0.16 : 0.04,
+      transparent: true,
+      opacity: options.opacity,
+    })
+    opacityMaterials.push(frameMat)
+
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.075, 1.04, 0.72), frameMat)
+    frame.position.y = 0.52
+    frame.castShadow = !options.ghost
+    group.add(frame)
+  }
+  group.userData.opacityMaterials = opacityMaterials
+
+  const displayWidth = options.projection ? 0.7 : 0.62
+  const displayHeight = options.projection ? 1 : 0.9
+  const displayCenterY = options.projection ? 0.5 : 0.54
+  const display = new THREE.Mesh(new THREE.PlaneGeometry(displayWidth, displayHeight), displayMat)
+  display.rotation.y = Math.PI / 2
+  display.position.set(options.projection ? 0.032 : 0.041, displayCenterY, 0)
+  display.renderOrder = options.projection ? 8 : 2
+  group.add(display)
+
+  if (options.projection) {
+    // The optical screen has thickness, so one projection plane per face prevents front-side occlusion.
+    const backMaterial = displayMat.clone()
+    backMaterial.map = displayMat.map
+    opacityMaterials.push(backMaterial)
+    const backDisplay = new THREE.Mesh(new THREE.PlaneGeometry(displayWidth, displayHeight), backMaterial)
+    backDisplay.rotation.y = -Math.PI / 2
+    backDisplay.position.set(-0.032, displayCenterY, 0)
+    backDisplay.renderOrder = 8
+    group.add(backDisplay)
+  } else {
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.05, 0.82), accentMat)
+    base.position.y = 0.025
+    group.add(base)
+  }
+
+  return group
+}
+
+function updateLiveLetterF(group: THREE.Group | null, x: number, topY: number, visible: boolean, opacity = 1) {
+  if (!group) return
+  if (!visible || !Number.isFinite(x) || !Number.isFinite(topY)) {
+    group.visible = false
+    return
+  }
+
+  const safeH = Math.max(Math.abs(topY), 0.22)
+  const orientation = topY >= 0 ? 1 : -1
+  group.position.set(x, 0, 0)
+  // Flipping both transverse axes gives a real image its expected 180-degree rotation.
+  group.scale.set(1, orientation * safeH, orientation * safeH)
+  group.visible = true
+  setObjectOpacity(group, opacity)
+}
+
 function updateLiveCandle(group: THREE.Group | null, x: number, topY: number, visible: boolean, opacity = 1) {
   if (!group) return
   if (!visible || !Number.isFinite(x) || !Number.isFinite(topY)) {
@@ -1873,7 +2067,7 @@ function createReusableScreen() {
 
   // 光屏只保留半透明承接面板，去掉中间立柱和底座，避免遮挡光路与成像观察。
   const screen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.045, 2.55, 1.45),
+    new THREE.BoxGeometry(0.045, SCREEN_HEIGHT, SCREEN_WIDTH),
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       transparent: true,
@@ -1884,10 +2078,111 @@ function createReusableScreen() {
       depthWrite: false,
     }),
   )
-  screen.position.set(0, 0.75, 0)
+  screen.position.set(0, SCREEN_CENTER_Y, 0)
   group.add(screen)
 
+  // Draw the centimeter grid once and keep it attached to the moving screen group.
+  const scaleTexture = createScreenScaleTexture()
+  const scaleMaterial = new THREE.MeshBasicMaterial({
+    map: scaleTexture,
+    transparent: true,
+    opacity: 0.92,
+    depthWrite: false,
+    side: THREE.FrontSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  })
+  const scaleOverlay = new THREE.Mesh(
+    new THREE.PlaneGeometry(SCREEN_WIDTH, SCREEN_HEIGHT),
+    scaleMaterial,
+  )
+  scaleOverlay.rotation.y = Math.PI / 2
+  scaleOverlay.position.set(0.026, SCREEN_CENTER_Y, 0)
+  scaleOverlay.renderOrder = 3
+  group.add(scaleOverlay)
+
+  // A separate outward-facing plane prevents the ruler numbers from being mirrored on the opposite face.
+  const reverseScaleMaterial = scaleMaterial.clone()
+  reverseScaleMaterial.map = scaleTexture
+  const reverseScaleOverlay = new THREE.Mesh(new THREE.PlaneGeometry(SCREEN_WIDTH, SCREEN_HEIGHT), reverseScaleMaterial)
+  reverseScaleOverlay.rotation.y = -Math.PI / 2
+  reverseScaleOverlay.position.set(-0.026, SCREEN_CENTER_Y, 0)
+  reverseScaleOverlay.renderOrder = 3
+  group.add(reverseScaleOverlay)
+
   return group
+}
+
+function createScreenScaleTexture() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 512
+  canvas.height = Math.round(canvas.width * (SCREEN_HEIGHT / SCREEN_WIDTH))
+  const ctx = canvas.getContext('2d')!
+
+  const xFromWorldZ = (z: number) => ((z + SCREEN_WIDTH / 2) / SCREEN_WIDTH) * canvas.width
+  const yFromWorldY = (y: number) => ((SCREEN_CENTER_Y + SCREEN_HEIGHT / 2 - y) / SCREEN_HEIGHT) * canvas.height
+  const minY = SCREEN_CENTER_Y - SCREEN_HEIGHT / 2
+  const maxY = SCREEN_CENTER_Y + SCREEN_HEIGHT / 2
+  const oneCm = HEIGHT_TO_UNIT
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const wash = ctx.createLinearGradient(0, 0, canvas.width, canvas.height)
+  wash.addColorStop(0, 'rgba(235,252,255,0.08)')
+  wash.addColorStop(1, 'rgba(126,232,255,0.03)')
+  ctx.fillStyle = wash
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+  // Horizontal scale: y=0 is the optical axis; minor lines are 1 cm and major lines are 5 cm.
+  const minCmY = Math.ceil(minY / oneCm)
+  const maxCmY = Math.floor(maxY / oneCm)
+  for (let cm = minCmY; cm <= maxCmY; cm += 1) {
+    const y = yFromWorldY(cm * oneCm)
+    const isAxis = cm === 0
+    const isMajor = cm % 5 === 0
+    ctx.beginPath()
+    ctx.moveTo(isMajor ? 0 : canvas.width * 0.055, y)
+    ctx.lineTo(canvas.width, y)
+    ctx.lineWidth = isAxis ? 4 : isMajor ? 2 : 1
+    ctx.strokeStyle = isAxis ? 'rgba(255,209,102,0.9)' : isMajor ? 'rgba(126,232,255,0.58)' : 'rgba(210,245,255,0.2)'
+    ctx.stroke()
+
+    if (isMajor) {
+      ctx.font = '700 22px Microsoft YaHei, Arial'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'bottom'
+      ctx.fillStyle = isAxis ? 'rgba(255,225,145,0.98)' : 'rgba(225,249,255,0.9)'
+      ctx.fillText(`${cm}`, 10, y - 4)
+    }
+  }
+
+  // The horizontal direction uses the same centimeter spacing; its center line marks z=0.
+  const maxCmZ = Math.floor((SCREEN_WIDTH / 2) / oneCm)
+  for (let cm = -maxCmZ; cm <= maxCmZ; cm += 1) {
+    const x = xFromWorldZ(cm * oneCm)
+    const isAxis = cm === 0
+    const isMajor = cm % 5 === 0
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, canvas.height)
+    ctx.lineWidth = isAxis ? 3 : isMajor ? 2 : 1
+    ctx.strokeStyle = isAxis ? 'rgba(255,209,102,0.72)' : isMajor ? 'rgba(126,232,255,0.48)' : 'rgba(210,245,255,0.16)'
+    ctx.stroke()
+  }
+
+  ctx.strokeStyle = 'rgba(225,249,255,0.75)'
+  ctx.lineWidth = 3
+  ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4)
+  ctx.font = '800 22px Microsoft YaHei, Arial'
+  ctx.textAlign = 'right'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = 'rgba(225,249,255,0.92)'
+  ctx.fillText('cm', canvas.width - 12, 10)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.minFilter = THREE.LinearFilter
+  texture.magFilter = THREE.LinearFilter
+  return texture
 }
 
 function updateLiveImagePatch(imageX: number, imageTopY: number, canShowImage: boolean, real: boolean) {
@@ -2125,6 +2420,9 @@ function hideLiveRaySegment(segment: LiveRaySegment) {
 }
 
 function createReusableLabels() {
+  liveScene.objectHeightLabel = makeTextSprite('H = 4.0 cm', '#ffd166', new THREE.Vector3(), 0.54, 34)
+  liveScene.imageHeightLabel = makeTextSprite("h\u2032 = 4.0 cm", '#34d9ff', new THREE.Vector3(), 0.54, 34)
+
   // 这些 Sprite 只创建一次；拖动时只移动和显隐，不重建 CanvasTexture。
   liveScene.objectLabel = makeTextSprite('发光蜡烛', '#ffd166', new THREE.Vector3(), 0.78, 44)
   liveScene.imageLabel = makeTextSprite('像', '#34d9ff', new THREE.Vector3(), 0.72, 40)
@@ -2144,6 +2442,8 @@ function createReusableLabels() {
     ;[
       liveScene.objectLabel,
       liveScene.imageLabel,
+      liveScene.objectHeightLabel,
+      liveScene.imageHeightLabel,
       liveScene.screenLabel,
       liveScene.focusStatusLabel,
       liveScene.objectDimLabel,
@@ -2178,6 +2478,8 @@ function updateLiveLabels(
   rawImageX: number,
 ) {
   if (liveScene.objectLabel) {
+    const isLetterF = objectKind.value === 'letterF'
+    updateTextSprite(liveScene.objectLabel, isLetterF ? '红色字母 F 屏' : '发光蜡烛', isLetterF ? '#ff6b7a' : '#ffd166')
     liveScene.objectLabel.position.copy(getCandleLabelPosition(objectX, objectTopY, 0.82))
     liveScene.objectLabel.visible = showLabels.value
   }
@@ -2189,15 +2491,30 @@ function updateLiveLabels(
     liveScene.imageLabel.visible = showLabels.value && canShowImage
   }
 
+  if (liveScene.objectHeightLabel) {
+    updateTextSprite(liveScene.objectHeightLabel, `H = ${formatNumber(m.h)} cm`, '#ffd166')
+    liveScene.objectHeightLabel.position.copy(getCandleLabelPosition(objectX, objectTopY, 0.25))
+    liveScene.objectHeightLabel.position.z = 0.42
+    liveScene.objectHeightLabel.visible = showLabels.value && showDimensions.value
+  }
+
+  if (liveScene.imageHeightLabel) {
+    const imageHeight = Math.abs(m.imageHeight)
+    updateTextSprite(liveScene.imageHeightLabel, `h\u2032 = ${formatNumber(imageHeight)} cm`, m.real ? '#34d9ff' : '#ff6b7a')
+    liveScene.imageHeightLabel.position.copy(getCandleLabelPosition(imageX, imageTopY, 0.25))
+    liveScene.imageHeightLabel.position.z = 0.5
+    liveScene.imageHeightLabel.visible = showLabels.value && showDimensions.value && canShowImage && Number.isFinite(imageHeight)
+  }
+
   if (liveScene.screenLabel) {
     const screenX = cmToX(focusChallenge.value ? state.screenCm : m.v)
-    liveScene.screenLabel.position.set(screenX, 2.55, 1.16)
+    liveScene.screenLabel.position.set(screenX, SCREEN_CENTER_Y + SCREEN_HEIGHT / 2 + 0.42, 1.16)
     liveScene.screenLabel.visible = showLabels.value && showScreen.value && m.real && Number.isFinite(m.v) && screenX >= MIN_X && screenX <= MAX_X
   }
 
   if (liveScene.focusStatusLabel) {
     const screenX = cmToX(state.screenCm)
-    liveScene.focusStatusLabel.position.set(screenX, 2.92, 0)
+    liveScene.focusStatusLabel.position.set(screenX, SCREEN_CENTER_Y + SCREEN_HEIGHT / 2 + 0.78, 0)
     liveScene.focusStatusLabel.visible =
       showLabels.value && focusChallenge.value && m.real && Number.isFinite(m.v) && screenX >= MIN_X && screenX <= MAX_X
   }
@@ -2519,12 +2836,20 @@ function addTube(group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3, r
   group.add(mesh)
 }
 
-function makeTextSprite(text: string, color: string, position: THREE.Vector3, size = 0.36, fontSize = 20) {
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')!
+type TextSpriteData = {
+  canvas: HTMLCanvasElement
+  texture: THREE.CanvasTexture
+  size: number
+  fontSize: number
+  text: string
+  color: string
+}
+
+function paintTextSpriteCanvas(canvas: HTMLCanvasElement, text: string, color: string, fontSize: number) {
   const lines = text.split('\n')
   canvas.width = 512
   canvas.height = Math.max(128, lines.length * fontSize * 2.55)
+  const ctx = canvas.getContext('2d')!
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.font = `900 ${fontSize}px Microsoft YaHei, Arial`
   ctx.textAlign = 'center'
@@ -2537,13 +2862,30 @@ function makeTextSprite(text: string, color: string, position: THREE.Vector3, si
     ctx.strokeText(line, canvas.width / 2, y)
     ctx.fillText(line, canvas.width / 2, y)
   })
+}
+
+function makeTextSprite(text: string, color: string, position: THREE.Vector3, size = 0.36, fontSize = 20) {
+  const canvas = document.createElement('canvas')
+  paintTextSpriteCanvas(canvas, text, color, fontSize)
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: false }))
+  sprite.userData.textSprite = { canvas, texture, size, fontSize, text, color } satisfies TextSpriteData
   sprite.position.copy(position)
   sprite.renderOrder = 99
   sprite.scale.set(size * 3.15, size * (canvas.height / canvas.width) * 3.15, 1)
   return sprite
+}
+
+function updateTextSprite(sprite: THREE.Sprite, text: string, color: string) {
+  const data = sprite.userData.textSprite as TextSpriteData | undefined
+  if (!data || (data.text === text && data.color === color)) return
+
+  data.text = text
+  data.color = color
+  paintTextSpriteCanvas(data.canvas, text, color, data.fontSize)
+  data.texture.needsUpdate = true
+  sprite.scale.set(data.size * 3.15, data.size * (data.canvas.height / data.canvas.width) * 3.15, 1)
 }
 
 function getResponsiveSceneScale(width: number) {
@@ -2608,6 +2950,7 @@ function applyResponsiveCamera(view: CameraView = cameraView.value) {
 
   camera.updateProjectionMatrix()
   controls.update()
+  sceneNeedsRender = true
 }
 
 function setCameraView(view: CameraView) {
@@ -2643,6 +2986,23 @@ function schedulePanelLayoutResize() {
   })
 }
 
+function getTargetRendererPixelRatio() {
+  const deviceRatio = window.devicePixelRatio || 1
+  // Lowering only the drawing-buffer resolution during interaction cuts fill-rate cost without changing layout or camera framing.
+  return Math.min(deviceRatio, isUserOrbiting ? 1 : 1.55)
+}
+
+function syncRendererPixelRatio() {
+  if (!renderer || !canvasWrapRef.value) return
+  const nextPixelRatio = getTargetRendererPixelRatio()
+  if (Math.abs(renderer.getPixelRatio() - nextPixelRatio) <= 0.01) return
+
+  const rect = canvasWrapRef.value.getBoundingClientRect()
+  renderer.setPixelRatio(nextPixelRatio)
+  renderer.setSize(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)), false)
+  renderer.render(scene, camera)
+}
+
 function resizeRenderer() {
   if (!canvasWrapRef.value || !renderer || !camera) return
   const rect = canvasWrapRef.value.getBoundingClientRect()
@@ -2650,7 +3010,7 @@ function resizeRenderer() {
   const height = Math.max(1, Math.round(rect.height))
   const aspect = width / height
   const currentSize = renderer.getSize(new THREE.Vector2())
-  const nextPixelRatio = Math.min(window.devicePixelRatio || 1, 1.55)
+  const nextPixelRatio = getTargetRendererPixelRatio()
 
   const sizeChanged = Math.abs(currentSize.x - width) >= 1 || Math.abs(currentSize.y - height) >= 1
   const aspectChanged = Math.abs(camera.aspect - aspect) > 0.0005
@@ -2679,8 +3039,11 @@ function animate(now: number) {
   // 这样不会在 OrbitControls 转动视角时反复重建场景，画面更稳、更适合课堂讲解。
 
   // 凸透镜保持静止。透镜旋转会让学生误以为透镜本身在运动，也会增加画面干扰。
-  controls?.update()
-  renderer?.render(scene, camera)
+  const controlsChanged = controls?.update() ?? false
+  if (sceneNeedsRender || controlsChanged) {
+    renderer?.render(scene, camera)
+    sceneNeedsRender = false
+  }
   frameId = requestAnimationFrame(animate)
 }
 
@@ -2717,7 +3080,7 @@ function scheduleDynamicSceneUpdate() {
   })
 }
 
-watch([metrics, showRays, showScreen, showLabels, showDimensions, focusChallenge, appMode, () => state.screenCm], () => {
+watch([metrics, showRays, showScreen, showLabels, showDimensions, focusChallenge, appMode, objectKind, () => state.screenCm], () => {
   nextTick(scheduleDynamicSceneUpdate)
 })
 
@@ -2741,6 +3104,7 @@ onBeforeUnmount(() => {
   if (rendererResizeFrame) cancelAnimationFrame(rendererResizeFrame)
   panelResizeTimers.forEach(timer => window.clearTimeout(timer))
   panelResizeTimers = []
+  if (interactionQualityTimer) window.clearTimeout(interactionQualityTimer)
   window.removeEventListener('resize', scheduleRendererResize)
   window.visualViewport?.removeEventListener('resize', scheduleRendererResize)
   resizeObserver?.disconnect()
@@ -3290,6 +3654,32 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 7px;
+}
+
+.object-switch {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(126, 232, 255, 0.14);
+
+  >span {
+    display: block;
+    margin-bottom: 7px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  >div {
+    display: grid;
+    grid-template-columns: 0.8fr 1.2fr;
+    gap: 7px;
+  }
+
+  button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 7px;
+  }
 }
 
 .layer-grid {
